@@ -1,13 +1,16 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentRecord, Limit, ResourceView, Snapshot, Stage, Usage, UsageReport, ViewToggles } from '../types'
+import type { AgentRecord, Limit, ResourceView, Snapshot, Stage, Usage, UsageReport, ViewMode, ViewToggles } from '../types'
 import { bandItems, noticesBetween, statusText, toBrief } from './core/brief'
 import type { Tone } from './core/brief'
 import type { Notice } from './core/brief'
-import { DEFAULTS, GLOBAL_CONFIG, GUIDE, PROJECT_CONFIG, readConfig, readProjectConfig } from './core/config'
+import { DEFAULTS, GLOBAL_CONFIG, GUIDE, PROJECT_CONFIG, readConfig, readProjectConfig, viewOf } from './core/config'
 import type { Config } from './core/config'
-import { demoSnapshot, demoUsage } from './core/demo'
+import { demoPlanSnapshot, demoSnapshot, demoUsage } from './core/demo'
+import { describeModes, loadModes, MODE_ENDED, modeBrief } from './core/modes'
+import type { Mode } from './core/modes'
+import { isPlanTool, isSessionList } from './core/plan'
 import { classify, DEFAULT_PATTERNS } from './core/derive'
 import type { Patterns } from './core/derive'
 import { inspectImages } from './core/docker'
@@ -39,10 +42,12 @@ import {
   shouldMeasure,
 } from './core/usage'
 import type { Machine, Sys } from './core/usage'
-import { langOf, WORDS } from './scene/labels'
+import { appleLanguage, langFrom, namesLanguage, WORDS } from './scene/labels'
 import type { Lang } from './scene/labels'
-import { fitLayout } from './scene/layout'
+import { fitLayout, fitPlan } from './scene/layout'
+import type { Layout } from './scene/layout'
 import { neon } from './scene/neon'
+import { renderPlan } from './scene/plan'
 import { ASK, BAD, WARN } from './scene/skin'
 import { describeScene, MAX_SOURCE, renderScene } from './scene/scene'
 import { advance } from './scene/stage'
@@ -66,7 +71,7 @@ type ResourceAction = (typeof ACTIONS)[number]
 const TOOL_DESCRIPTION = [
   'Records who holds a shared resource that only one agent should use at a time (by default the local `stack` of containers) and who waits for it, and shows it on the Agent Stage.',
   'It only records and shows: nothing is blocked, restored or enforced. Who gets the resource is decided by the person or the coordinator.',
-  '`grant` gives the resource to an agent, `release` frees it, `queue`, `unqueue` and `order` keep the waiting line.',
+  '`grant` gives the resource to an agent and `release` frees it; `queue`, `unqueue` and `order` manage the waiting line.',
   '`scope` is for the holder, before it changes anything: the containers it will touch, so swapped images can be told from the originals.',
   '`status` reads the current state of every agent and resource.',
   '`agent` is a worktree name or a distinctive part of one; left out, it means the calling session.',
@@ -95,11 +100,15 @@ const snapshot = atom({ plugin: 'agent-stage-cc', key: 'snapshot' } as const, EM
 })
 
 const stageNow = atom({ plugin: 'agent-stage-cc', key: 'stage' } as const, null, {
-  shape: 'stage-4',
+  shape: 'stage-5',
 })
 const ALL_ON: ViewToggles = { focus: false, labels: true, links: true }
 const view = atom({ plugin: 'agent-stage-cc', key: 'view' } as const, ALL_ON)
 const demo = atom({ plugin: 'agent-stage-cc', key: 'demo' } as const, false)
+/** The scene a person picked; null leaves it to the config. */
+const viewMode = atom({ plugin: 'agent-stage-cc', key: 'viewMode' } as const, null)
+/** The working mode turned on for the session, by name: kept over a reload. */
+const workMode = atom({ plugin: 'agent-stage-cc', key: 'workMode' } as const, null)
 const briefNow = atom({ plugin: 'agent-stage-cc', key: 'brief' } as const, null, { shape: 'brief-4' })
 const bandHidden = atom({ plugin: 'agent-stage-cc', key: 'bandHidden' } as const, false)
 
@@ -108,6 +117,14 @@ const TONES: Record<Tone, string> = {
   cpu: '#60a5fa', ram: '#5eead4', ownCpu: '#4b78b8', ownRam: '#3f9f95', short: '#a78bfa', long: '#c4b5fd', other: '#9aa5b8',
   low: WARN, out: BAD, ask: ASK, bad: BAD,
 }
+
+const VIEWS: Record<Lang, Record<ViewMode, string>> = {
+  en: { auto: 'View: auto', team: 'View: team', plan: 'View: plan' },
+  pl: { auto: 'Widok: auto', team: 'Widok: zespół', plan: 'Widok: plan' },
+}
+/** Said on the view switch when a plan is asked for and nobody keeps one. */
+const NO_PLAN: Record<Lang, string> = { en: ' (no plan yet)', pl: ' (brak planu)' }
+const NEXT_VIEW: Record<ViewMode, ViewMode> = { auto: 'team', team: 'plan', plan: 'auto' }
 
 const TOGGLES: Record<Lang, Record<keyof ViewToggles, string>> = {
   en: { focus: 'Needs attention only', labels: 'State labels', links: 'Links' },
@@ -126,7 +143,13 @@ type Self = {
   stage: Stage | null
   polls: number
   isDemo: boolean
+  /** Which invented data the demo shows. */
+  demoKind: 'team' | 'plan'
+  /** The working mode the person turned on for this session. */
+  mode: Mode | null
   lang: Lang
+  /** The language the machine itself is set to; the config may name another. */
+  systemLang: Lang
   utcOffsetMinutes: number
   config: Config
   patterns: Patterns
@@ -153,10 +176,34 @@ type Self = {
   paneWritten: string
 }
 
+/** What a command prints, or nothing where the machine has no such command. */
+async function printed($: EngineInterface, argv: readonly string[]): Promise<string> {
+  try {
+    const ran = await $.process.run([...argv], { timeoutMs: 5000 })
+
+    return ran.exitCode === 0 ? ran.stdout.trim() : ''
+  } catch {
+    return ''
+  }
+}
+
 /** The machine's language and clock offset, asked once: hooks have no locale. */
 async function readLocale($: EngineInterface, self: Self): Promise<void> {
   try {
-    self.lang = langOf((await $.env.get('LC_ALL')) || (await $.env.get('LC_MESSAGES')) || (await $.env.get('LANG')))
+    const env = [
+      await $.env.get('LC_ALL'),
+      await $.env.get('LC_MESSAGES'),
+      await $.env.get('LANG'),
+      (await $.env.get('LANGUAGE'))?.split(':')[0],
+    ]
+    // An app started from a dock or a menu often has no locale in its
+    // environment: then the system's own setting is asked, each in its way.
+    const asked = env.some(namesLanguage) ? [] : [
+      appleLanguage(await printed($, ['defaults', 'read', '-g', 'AppleLanguages'])),
+      await printed($, ['powershell', '-NoProfile', '-Command', '(Get-UICulture).Name']),
+    ]
+    self.systemLang = langFrom([...env, ...asked])
+    self.lang = self.config.language === 'auto' ? self.systemLang : self.config.language
     const zone = await $.process.run(['date', '+%z'], { timeoutMs: 5000 })
     const match = /^([+-])(\d\d)(\d\d)/.exec(zone.stdout.trim())
     if (match) self.utcOffsetMinutes = (match[1] === '-' ? -1 : 1) * (Number(match[2]) * 60 + Number(match[3]))
@@ -256,6 +303,49 @@ async function sampleUsage(
   await $.fs.write(sharedFile(stateDir), JSON.stringify({ at: now, by: self.sessionId, report: self.usage }))
 }
 
+/** The modes on offer in this session: built in, the person's, the project's. */
+async function modesHere($: EngineInterface, self: Self): Promise<Mode[]> {
+  if (!self.isLocated) await locateSelf($, self, await $.clock.now()).catch(() => undefined)
+
+  return loadModes($, await $.env.get('HOME'), self.who?.worktree)
+}
+
+/**
+ * `/stage agent`: turns a working mode on or off, or says which there are.
+ * The rules go to the agent as a note it reads with the person's next words.
+ */
+async function modeCommand($: EngineInterface, self: Self, wanted: string | undefined): Promise<{ text: string; context?: string[] }> {
+  const modes = await modesHere($, self)
+  const name = wanted?.toLowerCase()
+  if (name === undefined || name === '') return { text: describeModes(modes, self.mode?.name) }
+  if (name === 'off') {
+    const was = self.mode
+    self.mode = null
+    await update($, workMode, () => null)
+    // The view the mode held goes back to the config's.
+    if (was !== null) await update($, viewMode, () => null)
+    await emit($, self, at => ({ kind: 'mode', at, name: null }))
+    await refresh($, self)
+
+    return was === null ? { text: 'No working mode was on.' } : { text: `Working mode "${was.name}" is off.`, context: [MODE_ENDED] }
+  }
+  const mode = modes.find(m => m.name === name)
+  if (mode === undefined) return { text: `No working mode "${name}". ${describeModes(modes, self.mode?.name)}` }
+  self.mode = mode
+  self.writtenAt = 0
+  await update($, workMode, () => mode.name)
+  await emit($, self, at => ({ kind: 'mode', at, name: mode.name, ...(mode.role === undefined ? {} : { role: mode.role }) }))
+  // A mode is watched on the scene it names: its own agent's plan, or the team.
+  await update($, viewMode, () => mode.view)
+  await refresh($, self)
+  await $.ui.open({ id: PANE, title: 'Agent Stage' })
+
+  return {
+    text: `Working mode "${mode.name}" is on (${mode.title}). Say what you want done.`,
+    context: [modeBrief(mode)],
+  }
+}
+
 /**
  * The person's settings and the project's own patterns, read again now and
  * then so an edit takes hold without a restart. A missing file is the defaults.
@@ -264,6 +354,7 @@ async function loadConfig($: EngineInterface, self: Self): Promise<void> {
   const home = await $.env.get('HOME')
   const mine = home === undefined ? '' : await $.fs.read(`${home}/${GLOBAL_CONFIG}`).catch(() => '')
   self.config = mine === '' ? DEFAULTS : readConfig(mine)
+  self.lang = self.config.language === 'auto' ? self.systemLang : self.config.language
   const theirs = self.who === undefined ? '' : await $.fs.read(`${self.who.worktree}/${PROJECT_CONFIG}`).catch(() => '')
   const project = theirs === '' ? {} : readProjectConfig(theirs)
   self.patterns = {
@@ -343,7 +434,7 @@ async function refresh($: EngineInterface, self: Self): Promise<void> {
     }
     let next: Snapshot
     if (self.isDemo) {
-      next = demoSnapshot(Math.floor(self.polls / 2), now)
+      next = self.demoKind === 'plan' ? demoPlanSnapshot(self.polls, now) : demoSnapshot(Math.floor(self.polls / 2), now)
       self.usage = demoUsage(next)
     } else {
       if (self.who === undefined) return
@@ -367,7 +458,8 @@ async function refresh($: EngineInterface, self: Self): Promise<void> {
     }
     await brief($, self, next)
     // The scene is redrawn only when what a person would see has changed.
-    const stage = advance(self.stage, next, self.usage, now)
+    const mode = (await read($, viewMode)) ?? self.config.view
+    const stage = advance(self.stage, next, self.usage, now, { view: mode, ...(self.who === undefined ? {} : { self: self.who.id }) })
     if (stage !== self.stage) {
       self.stage = stage
       await update($, stageNow, () => stage)
@@ -444,7 +536,7 @@ async function resourceAction(
 export const register: Register = on => {
   const self: Self = {
     who: undefined, rec: undefined, written: '', writtenAt: 0, isLocated: false,
-    shown: '', stage: null, polls: 0, isDemo: false, lang: 'en', utcOffsetMinutes: 0,
+    shown: '', stage: null, polls: 0, isDemo: false, demoKind: 'team', mode: null, lang: 'en', systemLang: 'en', utcOffsetMinutes: 0,
     pane: '', paneWritten: '', images: null, config: DEFAULTS, patterns: DEFAULT_PATTERNS, last: null, briefShown: '',
     machine: undefined, cpuSeconds: null, system: null, sampledAt: 0, containers: {}, usage: null, limits: [], sessionId: '', trouble: '',
   }
@@ -453,7 +545,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'stage',
       description: 'Open the Agent Stage pane',
-      argumentHint: '[demo|live|band|status|grant <agent>|release|queue <agent>|order <agents>]',
+      argumentHint: '[agent <mode>|demo [plan]|live|view <auto|team|plan>|band|status|grant <agent>|release|queue <agent>|order <agents>]',
     })
     await $.tool.register({
       name: 'resource',
@@ -464,6 +556,8 @@ export const register: Register = on => {
     await readLocale($, self)
     await loadConfig($, self).catch(() => undefined)
     self.isDemo = await read($, demo)
+    const kept = await read($, workMode)
+    if (typeof kept === 'string') self.mode = (await modesHere($, self).catch(() => [])).find(m => m.name === kept) ?? null
     const sessionId = await $.session.id()
     await emit($, self, at => ({ kind: 'session-start', at, sessionId }))
     void refresh($, self)
@@ -475,11 +569,11 @@ export const register: Register = on => {
   // How to keep the stage's record, told once in each session's instructions.
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)
-    if (!self.config.guide) return composed
+    // A working mode's rules head every new thread while the mode is on.
+    const mode = self.mode === null ? [] : [{ id: 'agent-stage-cc:mode', text: modeBrief(self.mode), scope: 'session' as const }]
+    const guide = self.config.guide ? [{ id: 'agent-stage-cc:guide', text: GUIDE, scope: 'session' as const }] : []
 
-    return {
-      sections: [...composed.sections, { id: 'agent-stage-cc:guide', text: GUIDE, scope: 'session' as const }],
-    }
+    return { sections: [...composed.sections, ...guide, ...mode] }
   })
 
   on('session.end', async ($, e, next) => {
@@ -514,6 +608,12 @@ export const register: Register = on => {
     const isError = ran.deny !== undefined || ran.isError === true
     const output = ran.deny === undefined && typeof ran.text === 'string' ? ran.text : ''
     await emit($, self, at => ({ kind: 'tool-end', at, action, isError, output }))
+    // A subagent's own list is not the session's plan; the tasks it files are.
+    if (!isError && isPlanTool(String(e.tool)) && (e.agentId === undefined || isSessionList(String(e.tool)))) {
+      const input = e as unknown as Record<string, unknown>
+      self.writtenAt = 0
+      await emit($, self, at => ({ kind: 'plan-call', at, tool: String(e.tool), input, result: ran.result }))
+    }
 
     return ran
     // Watching must never cost a tool call: a failure here hands the call on.
@@ -528,14 +628,27 @@ export const register: Register = on => {
   on('command.run', { command: 'stage' }, async ($, e) => {
     const [wanted = '', ...rest] = e.args.trim().split(/\s+/)
     const verb = wanted.toLowerCase()
+    let said = ''
     if (verb === 'band') {
       const hidden = !(await read($, bandHidden))
       await update($, bandHidden, () => hidden)
 
       return { text: hidden ? 'Agent Stage band hidden.' : 'Agent Stage band shown.' }
     }
-    if (verb === 'demo' || verb === 'live') {
+    if (verb === 'agent') return modeCommand($, self, rest[0])
+    if (verb === 'view') {
+      const picked = viewOf(rest[0]?.toLowerCase())
+      if (picked === undefined) return { text: 'Usage: /stage view auto|team|plan' }
+      await update($, viewMode, () => picked)
+      await refresh($, self)
+      // Asked for a plan where nobody keeps one, the pane would show the team unexplained.
+      const shown = (self.stage?.plan ?? null) === null ? 'the team' : `the plan of ${self.stage?.plan?.agent.id ?? ''}`
+      said = picked === 'plan' && (self.stage?.plan ?? null) === null
+        ? ' View: plan. No agent keeps a task list right now, so the team is shown until one does.'
+        : ` View: ${picked}, showing ${shown}.`
+    } else if (verb === 'demo' || verb === 'live') {
       self.isDemo = verb === 'demo'
+      self.demoKind = rest[0]?.toLowerCase() === 'plan' ? 'plan' : 'team'
       self.stage = null
       // Figures of the other mode are not this one's.
       self.usage = null
@@ -556,7 +669,7 @@ export const register: Register = on => {
     const opened = await $.ui.open({ id: PANE, title: 'Agent Stage' })
     const mode = self.isDemo ? ' (demo data)' : ''
 
-    return { text: opened.isPlaced ? `Agent Stage opened${mode}.` : `Agent Stage did not open: ${opened.reason}` }
+    return { text: opened.isPlaced ? `Agent Stage opened${mode}.${said}` : `Agent Stage did not open: ${opened.reason}` }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -568,8 +681,14 @@ export const register: Register = on => {
     if (stage === null) return <Text dimColor>{words.worktrees(0)}</Text>
 
     // A surface without a vector element gets the same facts as a list.
+    const marks = { done: '✓', active: '▸', pending: '·' } as const
     const list = (
       <Box flexDirection="column">
+        {(stage.plan?.steps ?? []).map(s => (
+          <Text key={`step-${s.key}`} dimColor={s.status === 'pending'}>
+            {marks[s.status]} {s.ordinal}. {s.text}
+          </Text>
+        ))}
         {[...(stage.coordinator === null ? [] : [stage.coordinator]), ...stage.agents].map(a => (
           <Text color={a.needsAttention ? '#ff5fa2' : undefined} dimColor={a.isAsleep}>
             {a.id} · {a.isAsleep ? words.asleep : words.state[a.state]}
@@ -580,7 +699,9 @@ export const register: Register = on => {
     )
     if (e.surface === 'terminal') return list
 
-    const { layout, pixelWidth, pixelHeight } = fitLayout(e.props.bodyColumns, e.props.scroll.bodyRows, stage.resource !== null)
+    const plan = stage.plan ?? null
+    const planFit = plan === null ? null : fitPlan(e.props.bodyColumns, e.props.scroll.bodyRows, stage.resource !== null)
+    const { layout, pixelWidth, pixelHeight } = planFit ?? fitLayout(e.props.bodyColumns, e.props.scroll.bodyRows, stage.resource !== null)
     self.pane = JSON.stringify({
       bodyColumns: e.props.bodyColumns,
       bodyRows: e.props.scroll.bodyRows,
@@ -588,16 +709,14 @@ export const register: Register = on => {
       pixelWidth,
       pixelHeight,
     })
-    const source = renderScene(stage, layout, neon, {
-      ...toggles,
-      lang: self.lang,
-      utcOffsetMinutes: self.utcOffsetMinutes,
-      pixelWidth,
-      pixelHeight,
-    })
+    const options = { ...toggles, lang: self.lang, utcOffsetMinutes: self.utcOffsetMinutes, pixelWidth, pixelHeight }
+    const source = plan !== null && planFit !== null
+      ? renderPlan(stage, plan, planFit.layout, neon, options)
+      : renderScene(stage, layout as Layout, neon, options)
     if (source.length > MAX_SOURCE) return list
     const { Svg } = $.ui.resolve(e)
     const names = TOGGLES[self.lang]
+    const picked = (await read($, viewMode)) ?? self.config.view
     const toggle = (key: keyof ViewToggles) => (
       <Button
         key={key}
@@ -612,6 +731,14 @@ export const register: Register = on => {
           {toggle('focus')}
           {toggle('labels')}
           {toggle('links')}
+          <Button
+            key="view"
+            label={`◐ ${VIEWS[self.lang][picked]}${picked === 'plan' && plan === null ? NO_PLAN[self.lang] : ''}`}
+            onPress={async () => {
+              await update($, viewMode, () => NEXT_VIEW[picked])
+              await refresh($, self)
+            }}
+          />
         </Box>
         <Svg
           source={source}

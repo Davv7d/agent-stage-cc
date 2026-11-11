@@ -1,4 +1,5 @@
 import type { AgentState } from '../../types'
+import { glance, progressOf } from '../core/plan'
 import { usageText } from '../core/usage'
 import { WORDS } from './labels'
 import type { Lang } from './labels'
@@ -30,7 +31,7 @@ export const MAX_SOURCE = 131072
 export const esc = (text: string) =>
   text.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '')
 
-const n1 = (value: number) => (Math.round(value * 10) / 10).toString()
+export const n1 = (value: number) => (Math.round(value * 10) / 10).toString()
 
 export const shorten = (name: string, max: number) =>
   name.length <= max ? name : `${name.slice(0, Math.ceil((max - 1) / 2))}…${name.slice(-Math.floor((max - 1) / 2))}`
@@ -63,14 +64,14 @@ const CPU_ARC = [0, 0.25, 0.55, 0.9]
 const ARC_RADIUS = 21
 
 /** An agent's cost at a glance: an arc for CPU, a short bar for memory. */
-function gauges(level: { cpu: number; ram: number } | undefined, color: string, barAt: number): string {
+export function gauges(level: { cpu: number; ram: number } | undefined, color: string, barAt: number, radius = ARC_RADIUS): string {
   if (level === undefined) return ''
   const share = CPU_ARC[level.cpu] ?? 0
   const end = -90 + share * 360
   const tone = level.cpu >= 3 ? WARN : color
   const arc = share === 0
     ? ''
-    : `<circle r="${ARC_RADIUS}" fill="none" stroke="#293040" stroke-width="2"/><path d="M${polar([0, 0], ARC_RADIUS, -90)}A${ARC_RADIUS} ${ARC_RADIUS} 0 ${share > 0.5 ? 1 : 0} 1 ${polar([0, 0], ARC_RADIUS, end)}" fill="none" stroke="${tone}" stroke-width="2" stroke-linecap="round"/>`
+    : `<circle r="${radius}" fill="none" stroke="#293040" stroke-width="2"/><path d="M${polar([0, 0], radius, -90)}A${radius} ${radius} 0 ${share > 0.5 ? 1 : 0} 1 ${polar([0, 0], radius, end)}" fill="none" stroke="${tone}" stroke-width="2" stroke-linecap="round"/>`
   const bar = level.ram === 0
     ? ''
     : `<rect x="-20" y="${barAt}" width="40" height="3" rx="1.5" fill="#293040"/><rect x="-20" y="${barAt}" width="${level.ram * 10}" height="3" rx="1.5" fill="${level.ram >= 4 ? WARN : color}"/>`
@@ -86,7 +87,7 @@ const OWN = '#e7ebf2'
  * that is the stage's own: the bright end of each bar, the first figure
  * beside it.
  */
-function meters(levels: UsageLevels | null, at: Point): string {
+export function meters(levels: UsageLevels | null, at: Point): string {
   if (levels === null) return ''
   const [x, y] = at
   const ofMachine = (gb: number) => (levels.machineGb <= 0 ? 0 : Math.min(1, gb / levels.machineGb))
@@ -105,7 +106,7 @@ const polar = (center: Point, radius: number, degrees: number) =>
   `${n1(center[0] + radius * Math.cos((degrees * Math.PI) / 180))} ${n1(center[1] + radius * Math.sin((degrees * Math.PI) / 180))}`
 
 /** The shared resource: one segment per container, the holder's color on a swapped one. */
-function ring(resource: SceneResource, layout: Layout, o: SceneOptions, levels: UsageLevels | null): string {
+export function ring(resource: SceneResource, layout: { ring?: Layout['ring'] }, o: SceneOptions, levels: UsageLevels | null): string {
   if (layout.ring === undefined) return ''
   const w = WORDS[o.lang]
   const center = layout.ring.center
@@ -140,7 +141,7 @@ function ring(resource: SceneResource, layout: Layout, o: SceneOptions, levels: 
   return `<circle cx="${center[0]}" cy="${center[1]}" r="${RING_INNER - 7}" fill="#111827" stroke="${alarm}" stroke-width="2" stroke-dasharray="5 6"/>${segments}<text x="${center[0]}" y="${center[1] + 4}" class="t st" text-anchor="middle">${esc(word)}</text>${note === '' ? '' : `<text x="${center[0]}" y="${center[1] + RING_OUTER + 46}" class="t st" text-anchor="middle" style="fill:${alarm}">${esc(note)}</text>`}<text x="${layout.ring.caption[0]}" y="${layout.ring.caption[1]}" class="t cap" text-anchor="middle">${esc(resource.name.toUpperCase())}</text>${resource.queue.length > 0 ? `<text x="${layout.ring.queueCaption[0]}" y="${layout.ring.queueCaption[1]}" class="t cap" text-anchor="middle">${esc(w.queue.toUpperCase())}</text>` : ''}`
 }
 
-const move = (from: Point, to: Point) =>
+export const move = (from: Point, to: Point) =>
   `<animateTransform attributeName="transform" type="translate" from="${n1(from[0])} ${n1(from[1])}" to="${n1(to[0])} ${n1(to[1])}" dur="0.9s" calcMode="spline" keyTimes="0;1" keySplines=".3 0 .2 1" fill="freeze"/>`
 
 function spark(from: Point, to: Point, color: string): string {
@@ -150,14 +151,26 @@ function spark(from: Point, to: Point, color: string): string {
   return `<circle r="11" fill="${color}" opacity=".25">${fly}</circle><circle r="5" fill="${color}">${fly}</circle>`
 }
 
-function card(a: SceneAgent, at: Point, layout: Layout, o: SceneOptions, cores: number): string {
+/** A plan in a hover card: how far it is, and the steps around the one in progress. */
+function planRows(a: SceneAgent, o: SceneOptions): string[] {
+  const plan = a.plan
+  if (plan === undefined || plan.length === 0) return []
+  const { done, total, near } = glance(plan)
+  const mark = { done: '✓', active: '▸', pending: '·' } as const
+
+  return [WORDS[o.lang].stepsDone(done, total), ...near.map(s => `${mark[s.status]} ${shorten(s.text, 34)}`)]
+}
+
+export function card(a: SceneAgent, at: Point, layout: { width: number }, o: SceneOptions, cores: number): string {
   const w = WORDS[o.lang]
   const rows = [
     `${w.state[a.state]}${a.isAsleep ? ` · ${w.asleep}` : ''} · ${w.since} ${clock(a.since, o.utcOffsetMinutes)}`,
+    ...(a.mode === undefined ? [] : [`${w.mode}: ${shorten(a.mode, 30)}`]),
     ...(a.branch === null ? [] : [`${w.branch}: ${shorten(a.branch, 30)}`]),
     ...(a.lastAction === '' ? [] : [`${w.last}: ${shorten(a.lastAction, 30)}`]),
     ...(a.prUrl === undefined ? [] : [shorten(a.prUrl.replace(/^https?:\/\//, ''), 36)]),
     ...(a.usage === undefined ? [] : [`CPU ${usageText(a.usage, cores).replace(' · ', ' · RAM ')}`]),
+    ...planRows(a, o),
   ]
   const width = 252
   const height = 30 + rows.length * 14
@@ -184,6 +197,23 @@ function coordinatorBall(stage: Stage, layout: Layout, o: SceneOptions, question
     : ''
 
   return `<g transform="translate(${x},${y})"><circle r="46" fill="#e7ebf2" opacity=".12" filter="url(#blur)"/>${pulse}<g><circle r="36" fill="none" stroke="#5b6780" stroke-width="1.5" stroke-dasharray="3 7"/><animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="30s" repeatCount="indefinite"/></g><circle r="28" fill="#0f1420" stroke="${ring}" stroke-width="2"/><circle r="9" fill="#e7ebf2"/>${badge}<text y="58" class="t nm" text-anchor="middle" fill="#e7ebf2">${esc(shorten(stage.coordinator.id, layout.nameMax))}</text><text y="71" class="t st" text-anchor="middle"${questions > 0 ? ` style="fill:${ASK}"` : ''}>${esc(questions > 0 ? w.waiting(questions) : w.allGood)}</text></g>`
+}
+
+/** The document every scene is drawn in: its type, its backdrop, the skin's own parts. */
+export function frame(width: number, height: number, skin: Skin, o: SceneOptions, body: string): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${o.pixelWidth}" height="${o.pixelHeight}" viewBox="0 0 ${width} ${height}" role="img">
+<style>
+.t{font-family:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.nm{font-size:10.5px;font-weight:600}.st{font-size:9px;fill:#9aa5b8}
+.cap{font-size:10px;letter-spacing:.14em;fill:#7c879b}.hud{font-size:11.5px;fill:#c7cfdc}
+.tip{opacity:0;pointer-events:none;transition:opacity .15s}
+.hit:hover .tip{opacity:1}
+</style>
+<defs><radialGradient id="bg" cx="50%" cy="50%" r="70%"><stop offset="0" stop-color="#161d2c"/><stop offset="1" stop-color="#0b0f17"/></radialGradient>
+<pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="#1d2534"/></pattern>${skin.defs}</defs>
+<rect width="${width}" height="${height}" fill="url(#bg)"/><rect width="${width}" height="${height}" fill="url(#dots)"/>
+${body}
+</svg>`
 }
 
 /** One document for one stage: no script, every motion baked in as SMIL. */
@@ -219,7 +249,10 @@ export function renderScene(stage: Stage, layout: Layout, skin: Skin, o: SceneOp
       : ''
 
     const cost = gauges(levels?.agents[a.id], color, (o.labels ? 49 : 37) + drop)
-    balls += `<g transform="translate(${at[0]},${at[1]})"${isDim ? ` opacity="${a.isAsleep ? 0.35 : 0.2}"` : ''}>${travel}${fade}${cost}<g transform="scale(${layout.scale})">${skin.glyph(a, { color, ...(place.zone === 'queue' ? { queueIndex: place.index } : {}) })}</g><text y="${31 + drop}" class="t nm" text-anchor="middle" fill="${color}">${esc(shorten(a.id, layout.nameMax))}</text>${label}</g>`
+    // How far the agent's plan is, at the ball's shoulder.
+    const steps = a.plan === undefined ? undefined : progressOf(a.plan)
+    const progress = steps === undefined ? '' : `<text x="19" y="-17" class="t st" style="fill:${color}">${steps.done}/${steps.total}</text>`
+    balls += `<g transform="translate(${at[0]},${at[1]})"${isDim ? ` opacity="${a.isAsleep ? 0.35 : 0.2}"` : ''}>${travel}${fade}${cost}${progress}<g transform="scale(${layout.scale})">${skin.glyph(a, { color, ...(place.zone === 'queue' ? { queueIndex: place.index } : {}) })}</g><text y="${31 + drop}" class="t nm" text-anchor="middle" fill="${color}">${esc(shorten(a.id, layout.nameMax))}</text>${label}</g>`
     tips += `<g class="hit"><circle cx="${at[0]}" cy="${at[1]}" r="24" fill="#000" fill-opacity="0"/>${card(a, at, layout, o, levels?.cores ?? 1)}</g>`
 
     if (hasLead && o.links && place.zone === 'work' && a.state !== 'idle') {
@@ -239,7 +272,8 @@ export function renderScene(stage: Stage, layout: Layout, skin: Skin, o: SceneOp
   const count = (state: AgentState) => stage.agents.filter(a => a.state === state).length
   const questions = count('question')
   const live = stage.agents.filter(a => a.state !== 'done').length
-  const hudTop = `${hasLead ? `1 ${w.coordinatorName} · ` : ''}${w.worktrees(live)}${questions > 0 ? ` · ${w.questions} ${questions}` : ''}${unplaced > 0 ? ` · ${w.more(unplaced)}` : ''}`
+  const leadMode = stage.coordinator?.mode
+  const hudTop = `${hasLead ? `1 ${w.coordinatorName}${leadMode === undefined ? '' : ` (${w.mode}: ${shorten(leadMode, 18)})`} · ` : ''}${w.worktrees(live)}${questions > 0 ? ` · ${w.questions} ${questions}` : ''}${unplaced > 0 ? ` · ${w.more(unplaced)}` : ''}`
   const shared = stage.resource
   const hudResource = shared === null
     ? ''
@@ -249,18 +283,7 @@ export function renderScene(stage: Stage, layout: Layout, skin: Skin, o: SceneOp
   const caption = (at: Point, text: string) =>
     `<text x="${at[0]}" y="${at[1]}" class="t cap" text-anchor="middle">${esc(text)}</text>`
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${o.pixelWidth}" height="${o.pixelHeight}" viewBox="0 0 ${width} ${height}" role="img">
-<style>
-.t{font-family:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.nm{font-size:10.5px;font-weight:600}.st{font-size:9px;fill:#9aa5b8}
-.cap{font-size:10px;letter-spacing:.14em;fill:#7c879b}.hud{font-size:11.5px;fill:#c7cfdc}
-.tip{opacity:0;pointer-events:none;transition:opacity .15s}
-.hit:hover .tip{opacity:1}
-</style>
-<defs><radialGradient id="bg" cx="50%" cy="50%" r="70%"><stop offset="0" stop-color="#161d2c"/><stop offset="1" stop-color="#0b0f17"/></radialGradient>
-<pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="#1d2534"/></pattern>${skin.defs}</defs>
-<rect width="${width}" height="${height}" fill="url(#bg)"/><rect width="${width}" height="${height}" fill="url(#dots)"/>
-${hasLead ? caption(layout.captions.coordinator, w.coordinator) : ''}${caption(layout.captions.work, w.work)}${caption(layout.captions.pr, w.pr)}
+  return frame(width, height, skin, o, `${hasLead ? caption(layout.captions.coordinator, w.coordinator) : ''}${caption(layout.captions.work, w.work)}${caption(layout.captions.pr, w.pr)}
 <g>${links}</g>
 ${shared === null ? '' : ring(shared, layout, o, levels)}
 ${coordinatorBall(stage, layout, o, questions)}
@@ -269,13 +292,18 @@ ${coordinatorBall(stage, layout, o, questions)}
 ${hudResource === '' ? '' : `<text x="${layout.width - layout.hudTop[0]}" y="${layout.hudTop[1] + (layout.kind === 'narrow' ? 16 : 0)}" class="t hud" text-anchor="end">${esc(hudResource)}</text>`}
 <text x="${layout.hudBottom[0]}" y="${layout.hudBottom[1]}" class="t st">${esc(hudBottom)}</text>
 ${meters(levels, layout.meters)}
-<g>${tips}</g>
-</svg>`
+<g>${tips}</g>`)
 }
 
 /** What a reader who cannot see the drawing is told. */
 export function describeScene(stage: Stage, lang: Lang): string {
   const w = WORDS[lang]
+  const plan = stage.plan ?? null
+  if (plan !== null) {
+    const { done, total } = progressOf(plan.agent.plan ?? [])
+
+    return `${plan.agent.id}: ${w.state[plan.agent.state]}, ${w.stepsDone(done, total)}`
+  }
 
   return stage.agents.map(a => `${a.id}: ${w.state[a.state]}`).join(', ') || w.worktrees(0)
 }

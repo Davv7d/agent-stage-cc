@@ -15,6 +15,18 @@ export type AgentState =
 
 export type AgentRole = 'agent' | 'coordinator'
 
+export type PlanStepStatus = 'pending' | 'active' | 'done'
+
+/** One step of an agent's plan, as read from the task list the agent keeps. */
+export type PlanStep = {
+  /** The list's own name for the step, where it gives one. */
+  id?: string
+  text: string
+  status: PlanStepStatus
+  /** When the step was done, ms since the epoch: tells the latest one. */
+  doneAt?: number
+}
+
 /** One agent's file: `<git common dir>/agent-stage-cc/agents/<id>.json`. */
 export type AgentRecord = {
   /** Schema version of this file. */
@@ -41,6 +53,12 @@ export type AgentRecord = {
   updatedAt: number
   /** Present while the agent has a pull request open. */
   pr?: { url: string }
+  /** The agent's plan, while it keeps a task list. */
+  plan?: PlanStep[]
+  /** The working mode the person turned on for the agent's session, by name. */
+  mode?: string
+  /** The coordinator's role came from the mode alone, and leaves with it. */
+  isRoleFromMode?: true
 }
 
 /** A record as a view draws it: with what depends on the clock worked out. */
@@ -144,6 +162,34 @@ export type SceneAgent = {
   prUrl?: string
   /** What the agent cost the machine when the scene was last drawn. */
   usage?: Usage
+  /** The agent's plan, while it keeps one. */
+  plan?: PlanStep[]
+  /** The working mode the agent's session is in, by name. */
+  mode?: string
+}
+
+/** Which scene the pane shows: the team, one agent's plan, or whichever fits. */
+export type ViewMode = 'auto' | 'team' | 'plan'
+
+/** Where one step of a plan stands: its zone, and which place in it. */
+export type StepPlace = { zone: 'todo' | 'active' | 'gate' | 'done'; index: number }
+
+/** What the scene draws of one step. `ordinal` counts from one. */
+export type SceneStep = { key: string; ordinal: number; text: string; status: PlanStepStatus }
+
+/**
+ * One agent's plan as a scene: its steps move from waiting, through in
+ * progress, to done, as agents move between zones in the team's scene.
+ */
+export type PlanScene = {
+  agent: SceneAgent
+  steps: SceneStep[]
+  places: Record<string, StepPlace>
+  prevPlaces: Record<string, StepPlace>
+  /** The agent stopped with steps left: the plan waits on the person. */
+  isWaiting: boolean
+  /** Steps with no place on show, by zone. */
+  more: { todo: number; done: number }
 }
 
 /** Fixed places per zone, so an agent never jumps while it stays in a zone. */
@@ -181,6 +227,8 @@ export type Stage = {
   places: Record<string, Place>
   prevPlaces: Record<string, Place>
   sparks: Spark[]
+  /** Present when the pane shows one agent's plan instead of the team. */
+  plan: PlanScene | null
   /** The usage steps on show, and when they were last let change the scene. */
   levels: UsageLevels | null
   levelsAt: number
@@ -221,6 +269,10 @@ declare module 'claude-code' {
       demo: boolean
       brief: Shaped<Brief | null>
       bandHidden: boolean
+      /** The scene a person picked; null leaves it to the config. */
+      viewMode: ViewMode | null
+      /** The working mode turned on for the session, by name. */
+      workMode: string | null
     }
   }
 }

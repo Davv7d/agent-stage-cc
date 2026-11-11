@@ -1,6 +1,7 @@
 import type { AgentRecord, AgentState } from '../../types'
 import { endsWithQuestion, findPrUrl } from './derive'
 import type { Action } from './derive'
+import { isFinished, planAfter } from './plan'
 
 export type StageEvent =
   | { kind: 'session-start'; at: number; sessionId: string }
@@ -8,6 +9,10 @@ export type StageEvent =
   | { kind: 'turn-start'; at: number }
   | { kind: 'tool-start'; at: number; action: Action }
   | { kind: 'tool-end'; at: number; action: Action; isError: boolean; output?: string }
+  /** A call of a tool that keeps the agent's task list, once it succeeded. */
+  | { kind: 'plan-call'; at: number; tool: string; input: Readonly<Record<string, unknown>>; result?: unknown }
+  /** The person turned a working mode on, or off with null. */
+  | { kind: 'mode'; at: number; name: string | null; role?: 'coordinator' }
   /** What the forge says of the agent's pull request, asked now and then. */
   | { kind: 'pr-state'; at: number; state: 'open' | 'merged' | 'closed'; url?: string }
   | { kind: 'turn-end'; at: number; answer: string; reason: 'answer' | 'aborted' | 'refusal' | 'error' }
@@ -31,8 +36,12 @@ function onToolStart(rec: AgentRecord, at: number, action: Action): AgentRecord 
       return enter(acted, 'testing', at)
     case 'ask':
       return enter({ ...acted, before: rec.state === 'question' ? rec.before : rec.state }, 'question', at)
-    case 'coordinate':
-      return { ...acted, role: 'coordinator' }
+    case 'coordinate': {
+      // Handing work out makes a coordinator in its own right, whatever a mode said.
+      const { isRoleFromMode: _lent, ...own } = acted
+
+      return { ...own, role: 'coordinator' }
+    }
     default:
       return acted
   }
@@ -82,6 +91,13 @@ function onTurnEnd(rec: AgentRecord, at: number, answer: string, reason: string)
   return enter(rec, rest(rec), at)
 }
 
+/** A record with its mode gone, and with it a role only the mode had given. */
+function withoutMode(rec: AgentRecord): AgentRecord {
+  const { mode: _was, isRoleFromMode, ...rest } = rec
+
+  return isRoleFromMode === true ? { ...rest, role: 'agent' } : rest
+}
+
 /** One event applied to one agent's record: pure, so every rule is testable. */
 export function apply(rec: AgentRecord, event: StageEvent): AgentRecord {
   const next = step(rec, event)
@@ -91,12 +107,32 @@ export function apply(rec: AgentRecord, event: StageEvent): AgentRecord {
 
 function step(rec: AgentRecord, event: StageEvent): AgentRecord {
   switch (event.kind) {
-    case 'session-start':
-      return { ...rec, sessionId: event.sessionId, isLive: true }
+    case 'session-start': {
+      if (event.sessionId === rec.sessionId) return { ...rec, isLive: true }
+      // Another session in the same worktree: the plan and the mode were the last one's.
+      const { plan: _plan, ...fresh } = withoutMode(rec)
+
+      return { ...fresh, sessionId: event.sessionId, isLive: true }
+    }
     case 'session-end':
       return { ...rec, isLive: false }
+    case 'mode': {
+      const rest = withoutMode(rec)
+      if (event.name === null) return rest
+      if (event.role === undefined || rest.role === event.role) return { ...rest, mode: event.name }
+
+      return { ...rest, mode: event.name, role: event.role, isRoleFromMode: true }
+    }
+    case 'plan-call': {
+      const plan = planAfter(rec.plan, event.tool, event.input, event.result, event.at)
+      const { plan: _was, ...rest } = rec
+
+      return plan.length === 0 ? rest : { ...rest, plan }
+    }
     case 'turn-start': {
-      const { before: _answered, ...prompted } = { ...rec, promptAt: event.at }
+      // A new order after a finished plan starts from an empty one.
+      const { before: _answered, plan, ...fresh } = { ...rec, promptAt: event.at }
+      const prompted = plan === undefined || isFinished(plan) ? fresh : { ...fresh, plan }
       const wakes = rec.state === 'idle' || rec.state === 'question' || rec.state === 'failed' || rec.state === 'done'
 
       return wakes ? enter(prompted, 'research', event.at) : prompted

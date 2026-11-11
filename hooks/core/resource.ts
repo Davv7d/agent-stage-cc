@@ -164,7 +164,7 @@ export function describeResource(view: ResourceView): string {
     : `held by ${view.holder}${view.isStale ? ' (quiet for a long time)' : ''}${view.isUrgent ? ' (waiting on the person while others queue)' : ''}`
   const scope = view.members.length === 0
     ? 'no containers reported in scope'
-    : `${view.members.length} containers in scope, swapped: ${names(view.swapped)}`
+    : `${view.members.length} ${view.members.length === 1 ? 'container' : 'containers'} in scope, swapped: ${view.swapped.length === 0 ? 'none' : view.swapped.join(', ')}`
 
   return `${view.name}: ${held}; queue: ${names(view.queue)}; ${scope}`
 }

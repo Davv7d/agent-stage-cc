@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import type { AgentRecord, AgentState, ResourceView, Snapshot } from '../types'
 import { demoSnapshot, demoUsage } from '../hooks/core/demo'
 import { toSnapshot } from '../hooks/core/model'
-import { langOf } from '../hooks/scene/labels'
+import { appleLanguage, langFrom, langOf } from '../hooks/scene/labels'
 import { fitLayout } from '../hooks/scene/layout'
 import { neon } from '../hooks/scene/neon'
 import { MAX_SOURCE, renderScene, shorten } from '../hooks/scene/scene'
@@ -61,7 +61,7 @@ test('a question sends a pink spark to the coordinator, an answer a white one ba
   let stage = advance(null, shot(lead, agent('a', 'coding')))
   stage = advance(stage, shot(lead, agent('a', 'question')))
   expect(stage.sparks).toEqual([{ agent: 'a', kind: 'ask' }])
-  expect(draw(stage)).toContain('waiting on you: 1')
+  expect(draw(stage)).toContain('waiting for you: 1')
   stage = advance(stage, shot(lead, agent('a', 'research', { promptAt: 5 })))
   expect(stage.sparks).toEqual([{ agent: 'a', kind: 'order' }])
   expect(draw(stage)).toContain('fill="#ffffff"')
@@ -100,6 +100,19 @@ test('the layout follows the pane, the language follows the machine', async () =
   expect(langOf('pl_PL.UTF-8')).toBe('pl')
   expect(langOf('en_US.UTF-8')).toBe('en')
   expect(langOf(undefined)).toBe('en')
+  // Every system spells a locale its own way.
+  expect(['pl', 'pl-PL', 'pl_PL', 'PL_pl.utf8', 'pl@euro'].map(langOf)).toEqual(Array(5).fill('pl'))
+  expect(['plx', 'en-PL', 'de_DE', ''].map(langOf)).toEqual(Array(4).fill('en'))
+  // The first source that names a language decides; `C` and nothing name none.
+  expect(langFrom([undefined, '', 'pl_PL.UTF-8'])).toBe('pl')
+  expect(langFrom(['C', 'POSIX', 'C.UTF-8', 'pl-PL'])).toBe('pl')
+  expect(langFrom(['en_US.UTF-8', 'pl_PL.UTF-8'])).toBe('en')
+  expect(langFrom([undefined, 'C.UTF-8', ''])).toBe('en')
+  // macOS keeps its preferred languages as a list: the first one counts.
+  expect(appleLanguage('(\n    "pl-PL",\n    "en-PL"\n)')).toBe('pl-PL')
+  expect(appleLanguage('(\n    en,\n    pl\n)')).toBe('en')
+  expect(appleLanguage('')).toBe(undefined)
+  expect(langFrom([undefined, appleLanguage('(\n    "pl-PL"\n)')])).toBe('pl')
 })
 
 test('the drawing takes the whole pane, whatever its shape', async () => {

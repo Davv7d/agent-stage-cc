@@ -16,10 +16,14 @@ test('a person turns things off and tunes the timing', async () => {
     notify: { question: true, failed: false, pr: true },
     refreshSeconds: 5,
     asleepAfterMinutes: 10,
+    view: 'team',
+    language: 'pl',
   }))
   expect(config).toEqual({
     band: false,
     guide: true,
+    view: 'team',
+    language: 'pl',
     notify: { question: true, failed: false, released: true, pr: true },
     refreshMs: 5000,
     asleepAfterMs: 600_000,
@@ -54,4 +58,14 @@ test('the guide teaches the tool and sets no policy', async () => {
   expect(GUIDE).toContain('mcp__agent-stage-cc__resource')
   expect(GUIDE).toContain('never report your own state')
   expect(GUIDE).toContain('It only records and shows')
+})
+
+test('the view is one of three by name, and auto unless said', async () => {
+  expect(readConfig('{}').view).toBe('auto')
+  expect(readConfig('{"view":"plan"}').view).toBe('plan')
+  expect(readConfig('{"view":"board"}').view).toBe('auto')
+  // The language is the system's unless one the mod speaks is named.
+  expect(readConfig('{}').language).toBe('auto')
+  expect(readConfig('{"language":"en"}').language).toBe('en')
+  expect(readConfig('{"language":"de"}').language).toBe('auto')
 })

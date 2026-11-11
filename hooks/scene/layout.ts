@@ -141,6 +141,105 @@ function narrow(width: number, height: number, hasRing: boolean): Layout | undef
   }
 }
 
+/** Where the zones of one agent's plan sit; steps move through them. */
+export type PlanLayout = {
+  kind: 'wide' | 'narrow'
+  width: number
+  height: number
+  agent: Point
+  todo: (slot: number) => Point
+  active: (slot: number) => Point
+  gate: Point
+  done: (slot: number) => Point
+  /** The gate's line, drawn only while a step waits at it. */
+  gateLine: readonly [Point, Point]
+  captions: { agent: Point; todo: Point; active: Point; done: Point; gate: Point }
+  /** Where the count of steps without a place goes, by zone. */
+  more: { todo: Point; done: Point }
+  /** Present when there is room for the shared resource's ring. */
+  ring?: NonNullable<Layout['ring']>
+  hudTop: Point
+  hudBottom: Point
+  meters: Point
+  /** Characters of a step's text that fit under its ball. */
+  nameMax: number
+  scale: number
+}
+
+/** Left to right: the agent, what waits, what is in progress, what is done. */
+function planWide(width: number, height: number, hasRing: boolean): PlanLayout | undefined {
+  const ringRoom = hasRing && width >= 1060 && height >= 430 ? 270 : 0
+  const right = width - ringRoom
+  if (right < 640 || height < 384) return undefined
+  const from = 100
+  const to = right - 90
+  const at = (share: number) => Math.round(from + (to - from) * share)
+  const middle = Math.round((124 + height - 92) / 2)
+  const rowGap = clamp((height - 124 - 92) / 3, 56, 86)
+  const row = (i: number) => Math.round(middle + (i - 1.5) * rowGap)
+  const gateX = at(0.79)
+  const ringAt: Point = [width - 140, middle + 6]
+
+  return {
+    kind: 'wide',
+    width,
+    height,
+    agent: [from, middle],
+    // A little high, so the line to the step in progress passes between two rows.
+    todo: i => [at(0.3), row(i) - 10],
+    active: i => [at(0.58), middle + i * 88],
+    gate: [gateX, middle],
+    done: i => [to, row(i)],
+    gateLine: [[gateX, row(0) - 26], [gateX, row(3) + 26]],
+    captions: { agent: [from, 78], todo: [at(0.3), 78], active: [at(0.58), 78], done: [to, 78], gate: [gateX, row(3) + 46] },
+    more: { todo: [at(0.3), row(3) + 54], done: [to, row(3) + 54] },
+    ...(ringRoom > 0
+      ? { ring: { center: ringAt, queue: queueAt(ringAt), caption: [ringAt[0], 78] as const, queueCaption: [ringAt[0], 78] as const } }
+      : {}),
+    hudTop: [24, 36],
+    hudBottom: [24, height - 20],
+    meters: [width - 24 - METERS_WIDTH, height - 20],
+    nameMax: clamp(Math.floor(((to - from) * 0.21) / 5.6), 12, 24),
+    scale: 0.76,
+  }
+}
+
+/** Top to bottom for a docked pane, in the same order. */
+function planNarrow(width: number, height: number): PlanLayout | undefined {
+  if (width < 424 || height < 700) return undefined
+  const middle = Math.round(width / 2)
+  const gap = Math.min(130, (width - 40) / 4)
+  const across = (i: number) => Math.round(middle + (i - 1.5) * gap)
+  const from = 128
+  const to = height - 112
+  const at = (share: number) => Math.round(from + (to - from) * share)
+
+  return {
+    kind: 'narrow',
+    width,
+    height,
+    agent: [middle, from],
+    todo: i => [across(i), at(0.3)],
+    active: i => [Math.round(middle + i * 120), at(0.57)],
+    gate: [middle, at(0.78)],
+    done: i => [across(i), to],
+    gateLine: [[across(0) - 30, at(0.78)], [across(3) + 30, at(0.78)]],
+    captions: {
+      agent: [middle, 62],
+      todo: [middle, at(0.3) - 38],
+      active: [middle, at(0.57) - 44],
+      done: [middle, to - 38],
+      gate: [across(3) + 10, at(0.78) - 12],
+    },
+    more: { todo: [middle, at(0.3) + 52], done: [middle, to + 52] },
+    hudTop: [16, 28],
+    hudBottom: [16, height - 16],
+    meters: [16, height - 34],
+    nameMax: clamp(Math.floor(gap / 6.4) - 1, 10, 22),
+    scale: 0.76,
+  }
+}
+
 /**
  * A pane says its size in text cells; a drawing is sized in CSS pixels. A
  * cell of the body measured this wide and this tall on the desktop surface.
@@ -176,6 +275,26 @@ export function fitLayout(bodyColumns: number, bodyRows: number, hasRing = false
   // A pane too small for either flow: the narrow one at its least size,
   // which the pane then scrolls.
   const least = (hasRing ? narrow(480, 1060, true) : narrow(480, 760, false)) as Layout
+
+  return { layout: least, pixelWidth, pixelHeight: Math.round((pixelWidth * least.height) / least.width) }
+}
+
+export type PlanFit = { layout: PlanLayout; pixelWidth: number; pixelHeight: number }
+
+/** The plan's layout for a pane of this many columns and rows, as `fitLayout` finds the team's. */
+export function fitPlan(bodyColumns: number, bodyRows: number, hasRing = false): PlanFit {
+  const pixelWidth = Math.max(240, Math.floor(bodyColumns * COLUMN_PIXELS))
+  const pixelHeight = Math.max(240, Math.floor(bodyRows * ROW_PIXELS) - CHROME_PIXELS)
+  const isWide = pixelWidth >= pixelHeight * 1.2
+  for (const zoom of ZOOMS) {
+    const width = Math.round(pixelWidth / zoom)
+    const height = Math.round(pixelHeight / zoom)
+    const wide = planWide(width, height, hasRing)
+    const narrow = planNarrow(width, height)
+    const layout = isWide ? (wide ?? narrow) : (narrow ?? wide)
+    if (layout !== undefined) return { layout, pixelWidth, pixelHeight }
+  }
+  const least = planNarrow(480, 760) as PlanLayout
 
   return { layout: least, pixelWidth, pixelHeight: Math.round((pixelWidth * least.height) / least.width) }
 }

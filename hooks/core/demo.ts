@@ -1,4 +1,4 @@
-import type { AgentRecord, AgentState, ResourceView, Snapshot, Usage, UsageReport } from '../../types'
+import type { AgentRecord, AgentState, PlanStep, ResourceView, Snapshot, Usage, UsageReport } from '../../types'
 import { toSnapshot } from './model'
 
 // A made-up team that walks through every state, for trying the scene and
@@ -96,4 +96,34 @@ export function demoUsage(shot: Snapshot): UsageReport {
   }
 
   return { system, agents, containers, machine: { cores: 16, ramBytes: 32 * GB } }
+}
+
+const PLAN = ['Read the handler', 'Add the retry policy', 'Cover it with tests', 'Wire the config flag', 'Update the docs', 'Open the pull request']
+const WORK: AgentState[] = ['research', 'coding', 'testing']
+/** After these steps the demo agent stops and waits, as in work done step by step. */
+const STOPS = new Set([1, 3])
+
+/**
+ * One invented agent walking through a plan: three beats of work on each
+ * step, a stop for the person after some, and a rest once all is done.
+ */
+export function demoPlanSnapshot(tick: number, now: number): Snapshot {
+  const beats: { step: number; state: AgentState }[] = []
+  PLAN.forEach((_, step) => {
+    for (const state of WORK) beats.push({ step, state })
+    if (STOPS.has(step)) beats.push({ step: step + 1, state: 'question' }, { step: step + 1, state: 'question' })
+  })
+  for (let i = 0; i < 3; i++) beats.push({ step: PLAN.length, state: 'idle' })
+  const beat = beats[((tick % beats.length) + beats.length) % beats.length] ?? { step: 0, state: 'research' as AgentState }
+  const isWorking = beat.state !== 'question' && beat.state !== 'idle'
+  const plan: PlanStep[] = PLAN.map((text, i) =>
+    i < beat.step ? { text, status: 'done', doneAt: i + 1 } : i === beat.step && isWorking ? { text, status: 'active' } : { text, status: 'pending' },
+  )
+  const agent: AgentRecord = {
+    v: 1, sessionId: 'demo', isLive: true, id: 'retry-policy', worktree: '/demo/retry-policy', branch: 'feat/retry-policy',
+    role: 'agent', state: beat.state, since: now, lastAction: ACTIONS[beat.state], lastActionAt: now,
+    promptAt: beat.step, updatedAt: now, plan,
+  }
+
+  return toSnapshot([agent], now, { asleepAfterMs: 1e12 })
 }

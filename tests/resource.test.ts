@@ -115,4 +115,7 @@ test('names and docker output are read defensively', async () => {
   expect(parseInspect('')).toEqual({})
   const view = toResourceView(applyOp(fresh(), { kind: 'grant', agent: 'a' }, 1), [agent('a')], null, 2)
   expect(describeResource(view)).toBe('stack: held by a; queue: nobody; no containers reported in scope')
+  // Containers are counted and named as things, not as people.
+  expect(describeResource({ ...view, members: ['db'], swapped: [] })).toBe('stack: held by a; queue: nobody; 1 container in scope, swapped: none')
+  expect(describeResource({ ...view, members: ['db', 'api'], swapped: ['api'] })).toBe('stack: held by a; queue: nobody; 2 containers in scope, swapped: api')
 })

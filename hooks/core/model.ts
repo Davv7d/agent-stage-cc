@@ -5,6 +5,7 @@ import type {
   ResourceView,
   Snapshot,
 } from '../../types'
+import { mendPlan } from './plan'
 
 export const STATES = [
   'idle',
@@ -65,7 +66,12 @@ export function isAgentRecord(value: unknown): value is AgentRecord {
  * A stored record made right: one written by an earlier version may claim an
  * open pull request without its address, which nothing could ever close.
  */
-export function mend(rec: AgentRecord): AgentRecord {
+export function mend(stored: AgentRecord): AgentRecord {
+  const { plan: raw, ...bare } = stored
+  const plan = mendPlan(raw)
+  // A record with nothing to mend is handed back as it is.
+  const isSound = raw === undefined || (plan !== undefined && plan.length === raw.length)
+  const rec: AgentRecord = isSound ? stored : plan === undefined ? bare : { ...bare, plan }
   const url: unknown = rec.pr?.url
   if (rec.pr === undefined || typeof url === 'string') return rec
   const { pr: _unknown, ...rest } = rec

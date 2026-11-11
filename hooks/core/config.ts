@@ -1,3 +1,5 @@
+import type { ViewMode } from '../../types'
+
 /** Which events raise a notification. */
 export type NotifyEvents = {
   /** An agent asked the person something. */
@@ -19,6 +21,10 @@ export type Config = {
   band: boolean
   /** A short section in each session's instructions on keeping the stage's record. */
   guide: boolean
+  /** Which scene the pane shows: the team, one agent's plan, or whichever fits. */
+  view: ViewMode
+  /** The language of the scene and the band: the system's, unless one is named. */
+  language: 'auto' | 'en' | 'pl'
   notify: NotifyEvents
   /** How often the shared state is read, in milliseconds. */
   refreshMs: number
@@ -29,6 +35,8 @@ export type Config = {
 export const DEFAULTS: Config = {
   band: true,
   guide: true,
+  view: 'auto',
+  language: 'auto',
   notify: { question: true, failed: true, released: true, pr: false },
   refreshMs: 3000,
   asleepAfterMs: 30 * 60_000,
@@ -44,6 +52,10 @@ export type ProjectConfig = {
 
 export const GLOBAL_CONFIG = '.config/agent-stage-cc/config.json'
 export const PROJECT_CONFIG = '.agent-stage-cc.json'
+
+/** A view by its name; undefined for anything else. */
+export const viewOf = (value: unknown): ViewMode | undefined =>
+  value === 'auto' || value === 'team' || value === 'plan' ? value : undefined
 
 const bool = (value: unknown, fallback: boolean) => (typeof value === 'boolean' ? value : fallback)
 const within = (value: unknown, low: number, high: number, fallback: number) =>
@@ -66,6 +78,8 @@ export function readConfig(text: string): Config {
   return {
     band: bool(raw.band, DEFAULTS.band),
     guide: bool(raw.guide, DEFAULTS.guide),
+    view: viewOf(raw.view) ?? DEFAULTS.view,
+    language: raw.language === 'en' || raw.language === 'pl' ? raw.language : DEFAULTS.language,
     notify: {
       question: bool(notify.question, DEFAULTS.notify.question),
       failed: bool(notify.failed, DEFAULTS.notify.failed),
@@ -122,4 +136,6 @@ The stage also records who holds a shared resource that only one agent should us
 - If the resource is given to you: before changing anything, \`scope\` with the names of the containers you will touch, so swapped images can be told from the originals; \`release\` once you are finished.
 - \`status\` reads every agent's state and who holds the resource.
 
-Where this project uses no shared resource, this section does not apply.`
+Where this project uses no shared resource, this section does not apply.
+
+If you keep a task list for your work, the stage shows its steps and how far you are; nothing more is asked of you.`

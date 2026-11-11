@@ -24,6 +24,15 @@ type Words = {
   failedTests: string
   week: string
   agents: string
+  planAgent: string
+  mode: string
+  planTodo: string
+  planActive: string
+  planDone: string
+  gate: string
+  step: (n: number, total: number) => string
+  stepsDone: (done: number, total: number) => string
+  planCounts: (done: number, active: number, left: number) => string
   scene: string
   hide: string
   notice: {
@@ -44,13 +53,13 @@ export const WORDS: Record<Lang, Words> = {
     pr: 'PR',
     coordinatorName: 'coordinator',
     allGood: 'all running on their own',
-    waiting: n => `waiting on you: ${n}`,
+    waiting: n => `waiting for you: ${n}`,
     asleep: 'asleep',
     worktrees: n => `${n} worktree${n === 1 ? '' : 's'}`,
     questions: 'questions',
     since: 'since',
     branch: 'branch',
-    last: 'last',
+    last: 'last action',
     more: n => `+${n} more`,
     queue: 'queue',
     free: 'free',
@@ -60,6 +69,15 @@ export const WORDS: Record<Lang, Words> = {
     failedTests: 'failed tests',
     week: 'week',
     agents: 'agents',
+    planAgent: 'AGENT',
+    mode: 'mode',
+    planTodo: 'PLAN',
+    planActive: 'IN PROGRESS',
+    planDone: 'DONE',
+    gate: 'waiting for you',
+    step: (n, total) => `step ${n} / ${total}`,
+    stepsDone: (done, total) => `${done} / ${total} done`,
+    planCounts: (done, active, left) => `done ${done} · in progress ${active} · left ${left}`,
     scene: 'stage',
     hide: 'hide',
     notice: {
@@ -101,6 +119,15 @@ export const WORDS: Record<Lang, Words> = {
     failedTests: 'nieudane testy',
     week: 'week',
     agents: 'agenci',
+    planAgent: 'AGENT',
+    mode: 'tryb',
+    planTodo: 'PLAN',
+    planActive: 'W TOKU',
+    planDone: 'GOTOWE',
+    gate: 'czeka na Ciebie',
+    step: (n, total) => `krok ${n} / ${total}`,
+    stepsDone: (done, total) => `${done} / ${total} gotowe`,
+    planCounts: (done, active, left) => `zrobione ${done} · w toku ${active} · zostało ${left}`,
     scene: 'scena',
     hide: 'ukryj',
     notice: {
@@ -121,6 +148,23 @@ export const WORDS: Record<Lang, Words> = {
     },
   },
 }
+
+/**
+ * Whether a locale names a language at all: `C` and `POSIX` are the absence
+ * of one, common where a script or a container set them.
+ */
+export const namesLanguage = (locale: string | undefined): locale is string =>
+  locale !== undefined && locale.trim() !== '' && !/^(c|posix)([._@-]|$)/i.test(locale.trim())
+
+/**
+ * The language from what a machine says of itself, in the order given: the
+ * first source that names a language decides, so an empty or `C` setting
+ * does not hide a real one further down.
+ */
+export const langFrom = (sources: readonly (string | undefined)[]): Lang => langOf(sources.find(namesLanguage)?.trim())
+
+/** The preferred language macOS keeps: the first of `defaults read -g AppleLanguages`. */
+export const appleLanguage = (stdout: string): string | undefined => /"?([A-Za-z]{2,3}(?:[-_][A-Za-z0-9]+)*)"?/.exec(stdout.replace(/[()]/g, ''))?.[1]
 
 export const langOf = (locale: string | undefined): Lang =>
   locale !== undefined && /^pl([_.@-]|$)/i.test(locale) ? 'pl' : 'en'
