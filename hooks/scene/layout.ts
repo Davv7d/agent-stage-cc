@@ -33,7 +33,7 @@ const PR_PLACES = 5
 const namesIn = (gap: number) => clamp(Math.floor(gap / 6.8), 14, 26)
 
 /** How wide the two meters are drawn, side by side. */
-export const METERS_WIDTH = 300
+export const METERS_WIDTH = 350
 
 /** The ring's outer radius, and how far from its center the queue stands. */
 export const RING_OUTER = 82

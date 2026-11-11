@@ -31,13 +31,14 @@ import {
   parseShared,
   readMachine,
   sampleContainers,
-  sampleProcs,
+  sample,
   settle,
+  systemLoad,
   sharedFile,
   SHARED_FOR_MS,
   shouldMeasure,
 } from './core/usage'
-import type { Machine } from './core/usage'
+import type { Machine, Sys } from './core/usage'
 import { langOf, WORDS } from './scene/labels'
 import type { Lang } from './scene/labels'
 import { fitLayout } from './scene/layout'
@@ -94,17 +95,17 @@ const snapshot = atom({ plugin: 'agent-stage-cc', key: 'snapshot' } as const, EM
 })
 
 const stageNow = atom({ plugin: 'agent-stage-cc', key: 'stage' } as const, null, {
-  shape: 'stage-3',
+  shape: 'stage-4',
 })
 const ALL_ON: ViewToggles = { focus: false, labels: true, links: true }
 const view = atom({ plugin: 'agent-stage-cc', key: 'view' } as const, ALL_ON)
 const demo = atom({ plugin: 'agent-stage-cc', key: 'demo' } as const, false)
-const briefNow = atom({ plugin: 'agent-stage-cc', key: 'brief' } as const, null, { shape: 'brief-3' })
+const briefNow = atom({ plugin: 'agent-stage-cc', key: 'brief' } as const, null, { shape: 'brief-4' })
 const bandHidden = atom({ plugin: 'agent-stage-cc', key: 'bandHidden' } as const, false)
 
 /** The band's colors: one per figure, amber and red for what runs out. */
 const TONES: Record<Tone, string> = {
-  cpu: '#60a5fa', ram: '#5eead4', short: '#a78bfa', long: '#c4b5fd', other: '#9aa5b8',
+  cpu: '#60a5fa', ram: '#5eead4', ownCpu: '#4b78b8', ownRam: '#3f9f95', short: '#a78bfa', long: '#c4b5fd', other: '#9aa5b8',
   low: WARN, out: BAD, ask: ASK, bad: BAD,
 }
 
@@ -136,6 +137,8 @@ type Self = {
   machine: Machine | null | undefined
   /** CPU time each process had at the last sample, and when that was. */
   cpuSeconds: Record<number, number> | null
+  /** The machine's last reading, for the CPU rate of the next. */
+  system: Sys | null
   sampledAt: number
   containers: Record<string, Usage>
   usage: UsageReport | null
@@ -205,9 +208,9 @@ async function emit(
 }
 
 /**
- * What the agents and the scoped containers cost the machine now. Every
- * session that shows the band or the pane wants the figures; one of them
- * measures and leaves the result for the rest.
+ * How loaded the machine is now, and what each agent and scoped container
+ * costs it. Every session that shows the band or the pane wants the figures;
+ * one of them measures and leaves the result for the rest.
  */
 async function sampleUsage(
   $: EngineInterface,
@@ -223,6 +226,7 @@ async function sampleUsage(
   const shared = parseShared(await $.fs.read(sharedFile(stateDir)).catch(() => ''))
   if (!shouldMeasure(shared, self.sessionId, isWatching, now)) {
     self.cpuSeconds = null
+    self.system = null
     // Someone else's fresh figures, or none worth showing.
     self.usage = shared !== undefined && now - shared.at <= SHARED_FOR_MS * 2 ? shared.report : null
 
@@ -232,14 +236,19 @@ async function sampleUsage(
   if (self.machine === undefined) self.machine = (await readMachine($)) ?? null
   const machine = self.machine
   if (machine === null) return
-  const procs = await sampleProcs($, machine)
+  const taken = await sample($, machine)
   const trees = records.map(r => ({ id: r.id, path: r.worktree }))
-  const measured = measure(procs, trees, self.cpuSeconds, now - self.sampledAt)
+  const measured = measure(taken.procs, trees, self.cpuSeconds, now - self.sampledAt)
+  const system = systemLoad(taken.system, self.system)
   self.cpuSeconds = measured.cpuSeconds
+  self.system = taken.system ?? null
   self.sampledAt = now
+  // A rate takes two readings: the first one only sets the mark.
+  if (system === undefined) return
   if (scope.length === 0) self.containers = {}
   else if (self.polls % CONTAINERS_EVERY === 0) self.containers = await sampleContainers($, scope)
   self.usage = settle({
+    system,
     agents: measured.usage,
     containers: self.containers,
     machine: { cores: machine.cores, ramBytes: machine.ramBytes },
@@ -437,7 +446,7 @@ export const register: Register = on => {
     who: undefined, rec: undefined, written: '', writtenAt: 0, isLocated: false,
     shown: '', stage: null, polls: 0, isDemo: false, lang: 'en', utcOffsetMinutes: 0,
     pane: '', paneWritten: '', images: null, config: DEFAULTS, patterns: DEFAULT_PATTERNS, last: null, briefShown: '',
-    machine: undefined, cpuSeconds: null, sampledAt: 0, containers: {}, usage: null, limits: [], sessionId: '', trouble: '',
+    machine: undefined, cpuSeconds: null, system: null, sampledAt: 0, containers: {}, usage: null, limits: [], sessionId: '', trouble: '',
   }
 
   on('session.start', async ($, e, next) => {
@@ -531,6 +540,7 @@ export const register: Register = on => {
       // Figures of the other mode are not this one's.
       self.usage = null
       self.cpuSeconds = null
+      self.system = null
       self.last = null
       await update($, demo, () => self.isDemo)
       await refresh($, self)

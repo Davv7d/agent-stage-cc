@@ -16,9 +16,10 @@ configuration to start.
 - **A pane beside the chat** with the scene: a coordinator, the agents at
   work, a queue, the shared resource, and open pull requests. Agents keep a
   fixed place and glide between zones. The layout follows the pane's shape.
-- **A row above the prompt** with bare figures in fixed colors: CPU, memory,
-  what is left of your Claude rate limits, questions and failed tests. Hover a
-  figure for its name.
+- **A row above the prompt** with bare figures in fixed colors: CPU and
+  memory, each as the stage's own share and then the whole machine, what is
+  left of your Claude rate limits, questions and failed tests. Hover a figure
+  for its name.
 - **The same in the status line**, with short names.
 - **Notifications** when an agent asks you something, its tests fail, or the
   shared resource is released.
@@ -154,9 +155,11 @@ resource in `resources/`, and the latest usage measurement. Files of worktrees
 that no longer exist are removed. Outside a git repository the mod does
 nothing.
 
-CPU and memory are the sum of the processes whose working directory lies in an
-agent's worktree, plus `docker stats` for the containers in scope. Only one
-session measures at a time and the others read its result.
+CPU and memory are shown twice. The whole machine is what the system itself
+counts: `/proc/stat` and `/proc/meminfo` on Linux, `ps` and `vm_stat` on
+macOS. The stage's own share is the sum of the processes whose working
+directory lies in an agent's worktree, plus `docker stats` for the containers
+in scope. Only one session measures at a time and the others read its result.
 
 ## Status
 

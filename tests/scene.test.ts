@@ -204,7 +204,7 @@ test('a free ring says so, a restoring or blocked one is marked', async () => {
 })
 
 const GB = 1024 ** 3
-const cost = (cpu: number, ram: number) => ({ agents: { a: { cpu, ramBytes: ram * GB } }, containers: {}, machine: { cores: 8, ramBytes: 32 * GB } })
+const cost = (cpu: number, ram: number) => ({ system: { cpuPercent: 38, ramBytes: 19.6 * GB }, agents: { a: { cpu, ramBytes: ram * GB } }, containers: {}, machine: { cores: 8, ramBytes: 32 * GB } })
 
 test('exact figures go to the hover card, coarse steps to the drawing', async () => {
   const stage = advance(null, shot(agent('a', 'coding')), cost(80, 2), 1000)
@@ -213,7 +213,9 @@ test('exact figures go to the hover card, coarse steps to the drawing', async ()
   // A CPU arc round the ball, a memory bar under the name, meters for the whole.
   expect(svg).toContain('A21 21 0 1 1')
   expect(svg).toContain('width="30" height="3"')
-  expect(svg).toContain('>2 / 32 GB<')
+  // The meters are the whole machine, whatever the agents' share of it.
+  expect(svg).toContain('>10</tspan> / 40%<')
+  expect(svg).toContain('>2</tspan> / 20 / 32 GB<')
   // A quiet agent gets neither arc nor bar.
   const quiet = draw(advance(null, shot(agent('a', 'idle')), cost(1, 0.1), 1000))
   expect(quiet).not.toContain('A21 21')
@@ -236,7 +238,7 @@ test('a wobbling number cannot flicker the scene', async () => {
 
 test('a container under load shows on the rim of its segment', async () => {
   const res = stack({ holder: 'a', phase: 'held', members: ['db', 'api'] })
-  const usage = { agents: {}, containers: { db: { cpu: 0, ramBytes: GB }, api: { cpu: 300, ramBytes: GB } }, machine: { cores: 8, ramBytes: 32 * GB } }
+  const usage = { system: { cpuPercent: 40, ramBytes: 8 * GB }, agents: {}, containers: { db: { cpu: 0, ramBytes: GB }, api: { cpu: 300, ramBytes: GB } }, machine: { cores: 8, ramBytes: 32 * GB } }
   const svg = draw(advance(null, shotWith(res, agent('a', 'testing')), usage, 1000))
   expect(svg.match(/A87 87/g)?.length).toBe(1)
 })

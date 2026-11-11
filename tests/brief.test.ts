@@ -19,6 +19,8 @@ const shot = (records: AgentRecord[], resources: ResourceView[] = []): Snapshot 
   toSnapshot(records, 0, { asleepAfterMs: 1e12 }, resources)
 const GB = 1024 ** 3
 const USAGE: UsageReport = {
+  // The machine runs more than the agents: the band shows the machine.
+  system: { cpuPercent: 31.4, ramBytes: 38.2 * GB },
   agents: { a: { cpu: 120, ramBytes: 2 * GB }, b: { cpu: 40, ramBytes: 1.5 * GB } },
   containers: { api: { cpu: 80, ramBytes: 3.6 * GB } },
   machine: { cores: 16, ramBytes: 59.3 * GB },
@@ -33,13 +35,16 @@ test('the band is bare figures in a fixed order, each named on hover', async () 
   const brief = toBrief(shot([agent('a', 'coding'), agent('b', 'coding')]), USAGE, LIMITS)
   // Limits show what is left, not what is used.
   expect(bandItems(brief, EN)).toEqual([
-    { key: 'cpu', text: '15%', tone: 'cpu', hint: 'CPU' },
-    { key: 'ram', text: '7.1/59', tone: 'ram', hint: 'RAM GB' },
+    // The stage's own share first, in a quieter shade, then the whole machine.
+    { key: 'own-cpu', text: '15%', tone: 'ownCpu', hint: 'CPU agents' },
+    { key: 'cpu', text: '31%', tone: 'cpu', hint: 'CPU system' },
+    { key: 'own-ram', text: '7.1', tone: 'ownRam', hint: 'RAM agents GB' },
+    { key: 'ram', text: '38.2/59', tone: 'ram', hint: 'RAM system GB' },
     { key: 'limit-five_hour', text: '64%', tone: 'short', hint: '5h' },
     { key: 'limit-seven_day', text: '19%', tone: 'low', hint: 'week' },
   ])
   // A status line has no hover, so there every figure carries its name.
-  expect(statusText(brief, EN)).toBe('CPU 15% · RAM 7.1/59 GB · 5h 64% · week 19%')
+  expect(statusText(brief, EN)).toBe('CPU 31% (agents 15%) · RAM 38.2/59 GB (agents 7.1) · 5h 64% · week 19%')
 })
 
 test('what runs out changes color, whatever it is', async () => {
@@ -47,8 +52,12 @@ test('what runs out changes color, whatever it is', async () => {
   const items = bandItems(toBrief(shot([]), null, limits), WORDS.pl)
   expect(items.map(i => `${i.text}|${i.tone}`)).toEqual(['7%|out', '50%|long', '0%|out'])
   expect(items.map(i => i.hint)).toEqual(['5h', 'week', 'spend_limit'])
-  const hot = { agents: { a: { cpu: 1500, ramBytes: 50 * GB } }, containers: {}, machine: { cores: 16, ramBytes: 59.3 * GB } }
-  expect(bandItems(toBrief(shot([]), hot, []), EN).map(i => i.tone)).toEqual(['low', 'low'])
+  const hot = { system: { cpuPercent: 94, ramBytes: 50 * GB }, agents: {}, containers: {}, machine: { cores: 16, ramBytes: 59.3 * GB } }
+  // Only the machine's totals warn; the stage's share keeps its shade.
+  expect(bandItems(toBrief(shot([]), hot, []), EN).map(i => i.tone)).toEqual(['ownCpu', 'low', 'ownRam', 'low'])
+  // Counted two ways, the share may come out above the whole: it is never shown so.
+  const odd = { ...hot, system: { cpuPercent: 10, ramBytes: 4 * GB }, agents: { a: { cpu: 400, ramBytes: 6 * GB } } }
+  expect(toBrief(shot([]), odd, []).usage?.own).toEqual({ cpuPercent: 10, ramGb: 4 })
 })
 
 test('questions and failed tests appear only when there are some', async () => {
@@ -76,6 +85,9 @@ test('one session measures and the others read what it left', async () => {
   expect(parseShared(JSON.stringify(mine))).toEqual(mine)
   expect(parseShared('{"at":1')).toBe(undefined)
   expect(parseShared('{"at":1,"by":"x","report":{}}')).toBe(undefined)
+  // Figures left by a version that did not read the machine's own totals.
+  const { system: _, ...old } = USAGE
+  expect(parseShared(JSON.stringify({ ...mine, report: old }))).toBe(undefined)
 })
 
 test('a question, failed tests and a release are noticed once, as they happen', async () => {

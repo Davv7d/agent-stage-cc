@@ -88,5 +88,12 @@ export function demoUsage(shot: Snapshot): UsageReport {
     CONTAINERS.map(name => [name, { cpu: busy.has(name) ? 70 : 1, ramBytes: 0.3 * GB }]),
   )
 
-  return { agents, containers, machine: { cores: 16, ramBytes: 32 * GB } }
+  // The machine runs more than the stage: the rest is a steady share.
+  const all = [...Object.values(agents), ...Object.values(containers)]
+  const system = {
+    cpuPercent: Math.min(100, 6 + all.reduce((sum, u) => sum + u.cpu, 0) / 16),
+    ramBytes: 9 * GB + all.reduce((sum, u) => sum + u.ramBytes, 0),
+  }
+
+  return { system, agents, containers, machine: { cores: 16, ramBytes: 32 * GB } }
 }

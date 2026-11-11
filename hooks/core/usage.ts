@@ -1,8 +1,9 @@
 import type { EngineInterface } from 'claude-code'
 
-import type { Usage, UsageLevels, UsageReport } from '../../types'
+import type { SystemUsage, Usage, UsageLevels, UsageReport } from '../../types'
 
-// What the agents and the stack cost the machine. Linux and macOS answer
+// How loaded the machine is, and what each agent and container costs it.
+// Linux and macOS answer
 // differently, so each has a probe of its own behind one interface: a command
 // to run and a reader for what it prints. Everything after that is shared.
 
@@ -28,13 +29,27 @@ export type Proc = {
   cpuPercent?: number
 }
 
+/** The whole machine at one reading, as the system itself counts it. */
+export type Sys = {
+  /** Memory in use: what is not free for a new program to take. */
+  usedBytes: number
+  /** CPU in use now, percent of all cores (macOS: summed from its processes). */
+  cpuPercent?: number
+  /** CPU time since boot, busy and in all (Linux): a rate needs two readings. */
+  ticks?: { busy: number; all: number }
+}
+
 type Probe = {
   /** Asked once: clock ticks, page size, cores, memory, one per line. */
   machine: readonly string[]
-  /** Asked at every sample: working directories, `---`, then CPU and memory. */
+  /**
+   * Asked at every sample, in three parts split by `---`: working
+   * directories, each process's CPU and memory, the system's own totals.
+   */
   sample: readonly string[]
   readMachine: (lines: readonly string[]) => Omit<Machine, 'platform'>
   readSample: (cwds: string, stats: string, machine: Machine) => Proc[]
+  readSystem: (stats: string, totals: string, machine: Machine) => Sys | undefined
 }
 
 const sh = (script: string) => ['sh', '-c', script] as const
@@ -83,10 +98,43 @@ function readDarwin(cwds: string, stats: string): Proc[] {
   return procs
 }
 
+/** `/proc/stat`'s first line, then `MemTotal` and `MemAvailable` of `/proc/meminfo`. */
+function readLinuxSystem(_stats: string, totals: string): Sys | undefined {
+  const cpu = /^cpu\s+(.+)$/m.exec(totals)
+  const kib = (name: string) => int(new RegExp(`^${name}:\\s+(\\d+)`, 'm').exec(totals)?.[1])
+  const used = (kib('MemTotal') - kib('MemAvailable')) * 1024
+  if (Number.isNaN(used)) return undefined
+  // user nice system idle iowait irq softirq steal; guest time is in user.
+  const times = (cpu?.[1] ?? '').trim().split(/\s+/).slice(0, 8).map(int)
+  if (times.length < 5 || times.some(Number.isNaN)) return { usedBytes: used }
+  const all = times.reduce((sum, t) => sum + t, 0)
+
+  return { usedBytes: used, ticks: { busy: all - (times[3] ?? 0) - (times[4] ?? 0), all } }
+}
+
+/** `vm_stat` for memory; CPU is every process's share, summed. */
+function readDarwinSystem(stats: string, totals: string, machine: Machine): Sys | undefined {
+  const pages = (name: string) => int(new RegExp(`^"?${name}"?:\\s+(\\d+)`, 'm').exec(totals)?.[1])
+  const page = int(/page size of (\d+) bytes/.exec(totals)?.[1]) || machine.pageBytes
+  const held = pages('Pages wired down') + pages('Pages occupied by compressor')
+  // What a Mac calls memory used: its programs' own pages, less the ones it
+  // may drop at will, with what is wired and what the compressor holds.
+  const own = pages('Anonymous pages') - pages('Pages purgeable')
+  const used = Number.isNaN(own) ? pages('Pages active') + held : own + held
+  if (Number.isNaN(used)) return undefined
+  let cpu = 0
+  for (const line of stats.split('\n')) {
+    const percent = Number.parseFloat((line.trim().split(/\s+/)[1] ?? '').replace(',', '.'))
+    if (!Number.isNaN(percent)) cpu += percent
+  }
+
+  return { usedBytes: used * page, cpuPercent: Math.min(100, cpu / Math.max(1, machine.cores)) }
+}
+
 export const PROBES: Record<Platform, Probe> = {
   linux: {
     machine: sh("getconf CLK_TCK; getconf PAGESIZE; getconf _NPROCESSORS_ONLN; awk '/^MemTotal/{print $2}' /proc/meminfo"),
-    sample: sh("find /proc -maxdepth 2 -name cwd -printf '%p %l\\n' 2>/dev/null; echo ---; cat /proc/[0-9]*/stat 2>/dev/null"),
+    sample: sh("find /proc -maxdepth 2 -name cwd -printf '%p %l\\n' 2>/dev/null; echo ---; cat /proc/[0-9]*/stat 2>/dev/null; echo ---; head -n 1 /proc/stat; grep -E '^(MemTotal|MemAvailable):' /proc/meminfo"),
     readMachine: ([ticks, page, cores, kib]) => ({
       clockTicks: int(ticks) || 100,
       pageBytes: int(page) || 4096,
@@ -94,10 +142,11 @@ export const PROBES: Record<Platform, Probe> = {
       ramBytes: (int(kib) || 0) * 1024,
     }),
     readSample: readLinux,
+    readSystem: readLinuxSystem,
   },
   darwin: {
     machine: sh('echo 100; pagesize; sysctl -n hw.ncpu; sysctl -n hw.memsize'),
-    sample: sh('lsof -a -d cwd -Fpn 2>/dev/null; echo ---; ps -axo pid=,pcpu=,rss='),
+    sample: sh('lsof -a -d cwd -Fpn 2>/dev/null; echo ---; ps -axo pid=,pcpu=,rss=; echo ---; vm_stat'),
     readMachine: ([ticks, page, cores, bytes]) => ({
       clockTicks: int(ticks) || 100,
       pageBytes: int(page) || 4096,
@@ -105,17 +154,44 @@ export const PROBES: Record<Platform, Probe> = {
       ramBytes: int(bytes) || 0,
     }),
     readSample: readDarwin,
+    readSystem: readDarwinSystem,
   },
 }
 
 export const platformOf = (uname: string): Platform | undefined =>
   /linux/i.test(uname) ? 'linux' : /darwin/i.test(uname) ? 'darwin' : undefined
 
+const parts = (stdout: string) => {
+  const [cwds = '', stats = '', totals = ''] = `\n${stdout}\n`.split('\n---\n')
+
+  return { cwds, stats, totals }
+}
+
 export function parseSample(stdout: string, machine: Machine): Proc[] {
-  const cut = stdout.indexOf('\n---\n')
-  const [cwds, stats] = cut < 0 ? [stdout, ''] : [stdout.slice(0, cut), stdout.slice(cut + 5)]
+  const { cwds, stats } = parts(stdout)
 
   return PROBES[machine.platform].readSample(cwds, stats, machine)
+}
+
+export function parseSystem(stdout: string, machine: Machine): Sys | undefined {
+  const { stats, totals } = parts(stdout)
+
+  return PROBES[machine.platform].readSystem(stats, totals, machine)
+}
+
+/**
+ * The machine's load from a reading: CPU as a percent of all its cores,
+ * memory in use. Undefined while the CPU has no rate yet: where the system
+ * counts time since boot, that takes the reading before.
+ */
+export function systemLoad(now: Sys | undefined, before: Sys | null | undefined): SystemUsage | undefined {
+  if (now === undefined) return undefined
+  if (now.cpuPercent !== undefined) return { cpuPercent: now.cpuPercent, ramBytes: now.usedBytes }
+  const spent = now.ticks !== undefined && before?.ticks !== undefined ? now.ticks.all - before.ticks.all : 0
+  if (now.ticks === undefined || before?.ticks === undefined || spent <= 0) return undefined
+  const busy = Math.max(0, now.ticks.busy - before.ticks.busy)
+
+  return { cpuPercent: Math.min(100, (busy / spent) * 100), ramBytes: now.usedBytes }
 }
 
 /** The machine, asked once; undefined on a platform without a probe. */
@@ -129,10 +205,11 @@ export async function readMachine($: EngineInterface): Promise<Machine | undefin
   return { platform, ...PROBES[platform].readMachine(lines) }
 }
 
-export async function sampleProcs($: EngineInterface, machine: Machine): Promise<Proc[]> {
+/** One reading: every process, and the machine as a whole. */
+export async function sample($: EngineInterface, machine: Machine): Promise<{ procs: Proc[]; system: Sys | undefined }> {
   const ran = await $.process.run(PROBES[machine.platform].sample, { timeoutMs: 8000 })
 
-  return parseSample(ran.stdout, machine)
+  return { procs: parseSample(ran.stdout, machine), system: parseSystem(ran.stdout, machine) }
 }
 
 export type Tree = { id: string; path: string }
@@ -213,8 +290,18 @@ export async function sampleContainers(
   }
 }
 
-const total = (shares: Readonly<Record<string, Usage>>): Usage =>
-  Object.values(shares).reduce((sum, u) => ({ cpu: sum.cpu + u.cpu, ramBytes: sum.ramBytes + u.ramBytes }), { cpu: 0, ramBytes: 0 })
+/**
+ * The stage's own share of the machine: its agents and the containers in
+ * scope, CPU as a percent of all cores. Never more than the whole: the two
+ * are counted in different ways and may disagree by a little.
+ */
+export function ownShare(report: UsageReport): SystemUsage {
+  const all = [...Object.values(report.agents), ...Object.values(report.containers)]
+  const cpu = all.reduce((sum, u) => sum + u.cpu, 0) / Math.max(1, report.machine.cores)
+  const ram = all.reduce((sum, u) => sum + u.ramBytes, 0)
+
+  return { cpuPercent: Math.min(cpu, report.system.cpuPercent), ramBytes: Math.min(ram, report.system.ramBytes) }
+}
 
 const gb = (bytes: number) => (bytes / 1024 ** 3).toFixed(1)
 
@@ -233,9 +320,8 @@ const CONTAINER_CPU = [2, 25, 100]
 
 /** A report in the coarse steps the scene draws. */
 export function levelsOf(report: UsageReport): UsageLevels {
-  const agents = total(report.agents)
-  const stack = total(report.containers)
   const cores = Math.max(1, report.machine.cores)
+  const own = ownShare(report)
 
   return {
     agents: Object.fromEntries(
@@ -247,8 +333,10 @@ export function levelsOf(report: UsageReport): UsageLevels {
     containers: Object.fromEntries(
       Object.entries(report.containers).map(([name, u]) => [name, step(u.cpu, CONTAINER_CPU)]),
     ),
-    cpuPercent: Math.min(100, Math.round((agents.cpu + stack.cpu) / cores / 10) * 10),
-    ramGb: Math.round((agents.ramBytes + stack.ramBytes) / 1024 ** 3),
+    cpuPercent: Math.min(100, Math.round(report.system.cpuPercent / 10) * 10),
+    ramGb: Math.round(report.system.ramBytes / 1024 ** 3),
+    ownCpuPercent: Math.round(own.cpuPercent / 10) * 10,
+    ownRamGb: Math.round(own.ramBytes / 1024 ** 3),
     machineGb: Math.round(report.machine.ramBytes / 1024 ** 3),
     cores,
   }
@@ -261,7 +349,12 @@ export function settle(report: UsageReport): UsageReport {
       Object.entries(shares).map(([id, u]) => [id, { cpu: Math.round(u.cpu), ramBytes: Math.round(u.ramBytes / 1e8) * 1e8 }]),
     )
 
-  return { ...report, agents: round(report.agents), containers: round(report.containers) }
+  return {
+    ...report,
+    agents: round(report.agents),
+    containers: round(report.containers),
+    system: { cpuPercent: Math.round(report.system.cpuPercent), ramBytes: Math.round(report.system.ramBytes / 1e8) * 1e8 },
+  }
 }
 
 /** How long one session's measurement serves the others before it is stale. */
@@ -278,6 +371,8 @@ export function parseShared(text: string): SharedUsage | undefined {
     const report = parsed.report
     if (typeof parsed.at !== 'number' || typeof parsed.by !== 'string' || typeof report !== 'object' || report === null) return undefined
     if (typeof report.agents !== 'object' || typeof report.containers !== 'object' || typeof report.machine?.cores !== 'number') return undefined
+    // A measurement from before the machine's own totals were read.
+    if (typeof report.system?.cpuPercent !== 'number' || typeof report.system.ramBytes !== 'number') return undefined
 
     return { at: parsed.at, by: parsed.by, report }
   } catch {

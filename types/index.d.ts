@@ -98,8 +98,13 @@ export type Snapshot = {
 /** What something costs the machine: CPU in percent of one core, memory in bytes. */
 export type Usage = { cpu: number; ramBytes: number }
 
-/** What a session that shows the stage last measured. Never written to disk. */
+/** The machine as a whole: CPU as a percent of all its cores, memory in use. */
+export type SystemUsage = { cpuPercent: number; ramBytes: number }
+
+/** What a session that shows the stage last measured. */
 export type UsageReport = {
+  /** Everything that runs on the machine, as the system itself counts it. */
+  system: SystemUsage
   /** By agent id: the processes whose working directory is in its worktree. */
   agents: Record<string, Usage>
   /** By container name: the containers in a shared resource's scope. */
@@ -116,9 +121,12 @@ export type UsageLevels = {
   agents: Record<string, { cpu: number; ram: number }>
   /** By container name: 0 quiet to 3 heavy. */
   containers: Record<string, number>
-  /** Everything the stage watches, as a share of the machine, in tens. */
+  /** The whole machine's CPU in use, percent of all cores, in tens. */
   cpuPercent: number
   ramGb: number
+  /** The stage's own share of both: its agents and the containers in scope. */
+  ownCpuPercent: number
+  ownRamGb: number
   machineGb: number
   cores: number
 }
@@ -190,8 +198,12 @@ export type Limit = {
 
 /** What the band above the prompt and the status line show. */
 export type Brief = {
-  /** Everything the stage watches against the machine; null until measured. */
-  usage: { cpuPercent: number; ramGb: number; machineGb: number } | null
+  /**
+   * The whole machine's load, as the system counts it, and within it the
+   * stage's own share: its agents and the containers in scope. Null until
+   * measured.
+   */
+  usage: { cpuPercent: number; ramGb: number; machineGb: number; own: { cpuPercent: number; ramGb: number } } | null
   limits: Limit[]
   questions: number
   failed: number

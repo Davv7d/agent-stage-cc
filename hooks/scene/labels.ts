@@ -23,6 +23,7 @@ type Words = {
   stale: string
   failedTests: string
   week: string
+  agents: string
   scene: string
   hide: string
   notice: {
@@ -58,6 +59,7 @@ export const WORDS: Record<Lang, Words> = {
     stale: 'quiet for a long time',
     failedTests: 'failed tests',
     week: 'week',
+    agents: 'agents',
     scene: 'stage',
     hide: 'hide',
     notice: {
@@ -98,6 +100,7 @@ export const WORDS: Record<Lang, Words> = {
     stale: 'długo bez ruchu',
     failedTests: 'nieudane testy',
     week: 'week',
+    agents: 'agenci',
     scene: 'scena',
     hide: 'ukryj',
     notice: {

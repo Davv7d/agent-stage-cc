@@ -78,18 +78,27 @@ function gauges(level: { cpu: number; ram: number } | undefined, color: string, 
   return arc + bar
 }
 
-/** The whole stage's cost against the machine, bottom of the scene. */
+/** The stage's own share of a meter, drawn over the machine's. */
+const OWN = '#e7ebf2'
+
+/**
+ * How loaded the whole machine is, bottom of the scene, and how much of
+ * that is the stage's own: the bright end of each bar, the first figure
+ * beside it.
+ */
 function meters(levels: UsageLevels | null, at: Point): string {
   if (levels === null) return ''
   const [x, y] = at
-  const ramShare = levels.machineGb <= 0 ? 0 : Math.min(1, levels.ramGb / levels.machineGb)
-  const meter = (left: number, label: string, share: number, value: string) => {
-    const tone = share >= 0.8 ? WARN : '#60a5fa'
+  const ofMachine = (gb: number) => (levels.machineGb <= 0 ? 0 : Math.min(1, gb / levels.machineGb))
+  const fill = (left: number, share: number, color: string) =>
+    share <= 0 ? '' : `<rect x="${left + 26}" y="${y - 7}" width="${n1(Math.max(3, share * 60))}" height="6" rx="3" fill="${color}"/>`
+  const meter = (left: number, label: string, share: number, own: number, value: string) =>
+    `<text x="${left}" y="${y}" class="t st">${label}</text><rect x="${left + 26}" y="${y - 7}" width="60" height="6" rx="3" fill="#293040"/>${fill(left, share, share >= 0.8 ? WARN : '#60a5fa')}${fill(left, Math.min(own, share), OWN)}<text x="${left + 92}" y="${y}" class="t st"><tspan fill="${OWN}">${esc(value.split(' / ')[0] ?? '')}</tspan>${esc(value.slice(value.indexOf(' / ')))}</text>`
 
-    return `<text x="${left}" y="${y}" class="t st">${label}</text><rect x="${left + 26}" y="${y - 7}" width="60" height="6" rx="3" fill="#293040"/><rect x="${left + 26}" y="${y - 7}" width="${n1(Math.max(share > 0 ? 3 : 0, share * 60))}" height="6" rx="3" fill="${tone}"/><text x="${left + 92}" y="${y}" class="t st">${esc(value)}</text>`
-  }
-
-  return meter(x, 'CPU', levels.cpuPercent / 100, `${levels.cpuPercent}%`) + meter(x + 140, 'RAM', ramShare, `${levels.ramGb} / ${levels.machineGb} GB`)
+  return (
+    meter(x, 'CPU', levels.cpuPercent / 100, (levels.ownCpuPercent ?? 0) / 100, `${levels.ownCpuPercent ?? 0} / ${levels.cpuPercent}%`) +
+    meter(x + 150, 'RAM', ofMachine(levels.ramGb), ofMachine(levels.ownRamGb ?? 0), `${levels.ownRamGb ?? 0} / ${levels.ramGb} / ${levels.machineGb} GB`)
+  )
 }
 
 const polar = (center: Point, radius: number, degrees: number) =>

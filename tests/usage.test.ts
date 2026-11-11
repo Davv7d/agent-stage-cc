@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { levelsOf, measure, parseDockerStats, parseSample, platformOf, PROBES, settle } from '../hooks/core/usage'
+import { levelsOf, measure, parseDockerStats, parseSample, parseSystem, platformOf, PROBES, settle, systemLoad } from '../hooks/core/usage'
 import type { Machine } from '../hooks/core/usage'
 
 const LINUX: Machine = { platform: 'linux', cores: 8, ramBytes: 32 * 1024 ** 3, clockTicks: 100, pageBytes: 4096 }
@@ -36,6 +36,56 @@ test('macOS: lsof and ps give the same facts', async () => {
     { pid: 10, cwd: '/repo/wt/a', cpuPercent: 12.5, rssBytes: 20480 * 1024 },
     { pid: 12, cwd: '/Users/me', cpuPercent: 0.5, rssBytes: 1024 * 1024 },
   ])
+})
+
+test('Linux: the machine as a whole is what the system itself counts', async () => {
+  const reading = (user: number, idle: number, availableKib: number) =>
+    [
+      '/proc/10/cwd /repo/wt/a',
+      '---',
+      stat(10, 'node', 300, 100, 1000),
+      '---',
+      // user nice system idle iowait irq softirq steal guest guest_nice
+      `cpu  ${user} 0 100 ${idle} 50 0 0 0 30 0`,
+      'MemTotal:       32000000 kB',
+      `MemAvailable:   ${availableKib} kB`,
+    ].join('\n')
+  const first = parseSystem(reading(1000, 8000, 20000000), LINUX)
+  const second = parseSystem(reading(1300, 8700, 12000000), LINUX)
+  expect(first).toEqual({ usedBytes: 12000000 * 1024, ticks: { busy: 1100, all: 9150 } })
+  // CPU time counts from boot: one reading has no rate, two do.
+  expect(systemLoad(first, null)).toBe(undefined)
+  // 300 busy ticks of 1000 gone by; memory is what no program could take.
+  expect(systemLoad(second, first)).toEqual({ cpuPercent: 30, ramBytes: 20000000 * 1024 })
+  // The processes are still read from the same output.
+  expect(parseSample(reading(1000, 8000, 1), LINUX).map(p => p.pid)).toEqual([10])
+  // A machine that says nothing of itself gives no figure rather than a wrong one.
+  expect(parseSystem('---\n---\n', LINUX)).toBe(undefined)
+  expect(systemLoad(undefined, first)).toBe(undefined)
+})
+
+test('macOS: memory from vm_stat, CPU summed over every process', async () => {
+  const out = [
+    'p10', 'fcwd', 'n/repo/wt/a',
+    '---',
+    '   10  120.0  20480', '   12   40,0   1024', '   99   40.0   10',
+    '---',
+    'Mach Virtual Memory Statistics: (page size of 16384 bytes)',
+    'Pages free:                               10000.',
+    'Pages active:                            400000.',
+    'Pages wired down:                        100000.',
+    'Pages purgeable:                          20000.',
+    '"Translation faults":                  123456789.',
+    'Anonymous pages:                         320000.',
+    'Pages stored in compressor:              900000.',
+    'Pages occupied by compressor:             50000.',
+  ].join('\n')
+  const system = parseSystem(out, MAC)
+  // 200% of one core over 8 cores; own pages less purgeable, wired, compressed.
+  expect(system).toEqual({ usedBytes: (320000 - 20000 + 100000 + 50000) * 16384, cpuPercent: 25 })
+  // The system says the rate outright: no second reading needed.
+  expect(systemLoad(system, null)).toEqual({ cpuPercent: 25, ramBytes: 450000 * 16384 })
+  expect(parseSample(out, MAC).length).toBe(1)
 })
 
 test('each platform has a probe, an unknown one has none', async () => {
@@ -85,6 +135,7 @@ test('docker stats is read in any unit it prints', async () => {
 test('the scene gets usage in coarse steps, the machine as the measure', async () => {
   const GB = 1024 ** 3
   const levels = levelsOf({
+    system: { cpuPercent: 47, ramBytes: 21.4 * GB },
     agents: {
       quiet: { cpu: 2, ramBytes: 0.1 * GB },
       busy: { cpu: 30, ramBytes: 1 * GB },
@@ -101,18 +152,26 @@ test('the scene gets usage in coarse steps, the machine as the measure', async (
     heavy: { cpu: 3, ram: 4 },
   })
   expect(levels.containers).toEqual({ db: 0, api: 2, web: 3 })
-  // 863% of one core over 8 cores is 108% of the machine: shown as full.
-  expect(levels.cpuPercent).toBe(100)
-  expect(levels.ramGb).toBe(11)
+  // The whole is the machine's own count, not the sum of what is watched.
+  expect(levels.cpuPercent).toBe(50)
+  expect(levels.ramGb).toBe(21)
+  // Within it, the stage's own share: 863% of one core over 8 cores, capped at the whole.
+  expect(levels.ownCpuPercent).toBe(50)
+  expect(levels.ownRamGb).toBe(11)
   expect(levels.machineGb).toBe(32)
 })
 
 test('jitter below what is shown does not make a new report', async () => {
   const report = settle({
+    system: { cpuPercent: 31.4, ramBytes: 20 * 1024 ** 3 },
     agents: { a: { cpu: 160.4, ramBytes: 2 * 1024 ** 3 } },
     containers: {},
     machine: { cores: 8, ramBytes: 32 * 1024 ** 3 },
   })
-  const again = settle({ ...report, agents: { a: { cpu: 160.2, ramBytes: 2 * 1024 ** 3 + 5 } } })
+  const again = settle({
+    ...report,
+    system: { cpuPercent: 30.8, ramBytes: 20 * 1024 ** 3 + 5 },
+    agents: { a: { cpu: 160.2, ramBytes: 2 * 1024 ** 3 + 5 } },
+  })
   expect(JSON.stringify(again)).toBe(JSON.stringify(report))
 })

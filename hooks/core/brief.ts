@@ -1,24 +1,24 @@
 import type { Brief, Limit, Snapshot, UsageReport } from '../../types'
 import type { NotifyEvents } from './config'
+import { ownShare } from './usage'
 
 const GB = 1024 ** 3
 
 /**
- * What the band and the status line show: what the stage costs the machine,
- * how much of the account's limits is left, and what waits on the person.
+ * What the band and the status line show: how loaded the machine is and how
+ * much of that is the stage's, how much of the account's limits is left, and
+ * what waits on the person.
  */
 export function toBrief(shot: Snapshot, usage: UsageReport | null, limits: readonly Limit[]): Brief {
-  const all = usage === null ? [] : [...Object.values(usage.agents), ...Object.values(usage.containers)]
-  const cpu = all.reduce((sum, u) => sum + u.cpu, 0)
-  const ram = all.reduce((sum, u) => sum + u.ramBytes, 0)
-
+  const own = usage === null ? null : ownShare(usage)
   return {
     usage: usage === null
       ? null
       : {
-          cpuPercent: Math.min(100, Math.round(cpu / Math.max(1, usage.machine.cores))),
-          ramGb: Math.round((ram / GB) * 10) / 10,
+          cpuPercent: Math.min(100, Math.round(usage.system.cpuPercent)),
+          ramGb: Math.round((usage.system.ramBytes / GB) * 10) / 10,
           machineGb: Math.round(usage.machine.ramBytes / GB),
+          own: { cpuPercent: Math.round(own?.cpuPercent ?? 0), ramGb: Math.round(((own?.ramBytes ?? 0) / GB) * 10) / 10 },
         },
     limits: limits.map(l => ({ ...l, percentUsed: Math.round(l.percentUsed) })),
     questions: shot.counts.question,
@@ -30,10 +30,11 @@ export type BriefWords = {
   questions: string
   failedTests: string
   week: string
+  agents: string
 }
 
 /** The tones a figure in the band takes; a view gives each its color. */
-export type Tone = 'cpu' | 'ram' | 'short' | 'long' | 'other' | 'low' | 'out' | 'ask' | 'bad'
+export type Tone = 'cpu' | 'ram' | 'ownCpu' | 'ownRam' | 'short' | 'long' | 'other' | 'low' | 'out' | 'ask' | 'bad'
 
 /**
  * One figure in the band: the bare number, the tone that tells it apart,
@@ -43,18 +44,22 @@ export type BandItem = { key: string; text: string; tone: Tone; hint: string }
 
 /**
  * The band, narrow enough for a docked chat: bare figures in a fixed order,
- * each in its own color. Limits show what is left, not what is used.
+ * each in its own color. CPU and memory come in pairs: the stage's own share
+ * in a quieter shade, then the whole machine. Limits show what is left, not
+ * what is used.
  */
 export function bandItems(brief: Brief, words: BriefWords): BandItem[] {
   const items: BandItem[] = []
   if (brief.usage !== null) {
-    const { cpuPercent, ramGb, machineGb } = brief.usage
-    items.push({ key: 'cpu', text: `${cpuPercent}%`, tone: cpuPercent >= 80 ? 'low' : 'cpu', hint: 'CPU' })
+    const { cpuPercent, ramGb, machineGb, own } = brief.usage
+    items.push({ key: 'own-cpu', text: `${own.cpuPercent}%`, tone: 'ownCpu', hint: `CPU ${words.agents}` })
+    items.push({ key: 'cpu', text: `${cpuPercent}%`, tone: cpuPercent >= 80 ? 'low' : 'cpu', hint: 'CPU system' })
+    items.push({ key: 'own-ram', text: own.ramGb.toFixed(1), tone: 'ownRam', hint: `RAM ${words.agents} GB` })
     items.push({
       key: 'ram',
       text: `${ramGb.toFixed(1)}/${machineGb}`,
       tone: machineGb > 0 && ramGb / machineGb >= 0.8 ? 'low' : 'ram',
-      hint: 'RAM GB',
+      hint: 'RAM system GB',
     })
   }
   for (const limit of brief.limits) {
@@ -79,7 +84,11 @@ export function bandItems(brief: Brief, words: BriefWords): BandItem[] {
 export function statusText(brief: Brief, words: BriefWords): string | undefined {
   const parts: string[] = []
   if (brief.usage !== null) {
-    parts.push(`CPU ${brief.usage.cpuPercent}%`, `RAM ${brief.usage.ramGb.toFixed(1)}/${brief.usage.machineGb} GB`)
+    const { cpuPercent, ramGb, machineGb, own } = brief.usage
+    parts.push(
+      `CPU ${cpuPercent}% (${words.agents} ${own.cpuPercent}%)`,
+      `RAM ${ramGb.toFixed(1)}/${machineGb} GB (${words.agents} ${own.ramGb.toFixed(1)})`,
+    )
   }
   for (const limit of brief.limits) {
     const name = limit.kind === 'five_hour' ? '5h' : limit.kind === 'seven_day' ? words.week : limit.kind
