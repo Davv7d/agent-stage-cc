@@ -1,0 +1,7 @@
+{
+  "name": "agent-stage-cc",
+  "version": "0.0.1",
+  "description": "Live stage for multi-agent work: every worktree agent, what it is doing, and who is waiting on you",
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}

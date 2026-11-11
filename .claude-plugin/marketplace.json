@@ -1,0 +1,5 @@
+{
+  "name": "agent-stage-cc",
+  "owner": { "name": "agent-stage-cc contributors" },
+  "plugins": [{ "name": "agent-stage-cc", "source": "./" }]
+}
