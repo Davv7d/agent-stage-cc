@@ -108,6 +108,15 @@ so one command is enough. `/stage agent` lists the modes on offer, and
   their questions and results to you. It also keeps the record of the shared
   resource: who holds it, who waits, and in what order. Who goes first stays
   yours and the project's to decide.
+- **`init`**: set the project up for agents, so that every later session, on
+  any machine and for anyone, starts ready. The agent reads what the folder
+  already holds, asks about the project, its technologies, its working rules
+  and what agents may reach, and proposes the files. Once you accept, it
+  writes them: `AGENTS.md`, a `CLAUDE.md` that imports it, project skills,
+  `.claude/settings.json`, `.mcp.json` where MCP servers are wanted, and
+  `.agent-stage-cc.json` with the project's default mode. In an existing
+  project it asks only about the gaps, and it changes no file without
+  showing you the change. Its phases are its task list, as in `plan`.
 
 `plan` and `full` tell the agent to keep the phases as its task list, so the
 pane shows them as the plan: which phase is in progress, which are done, and
@@ -139,14 +148,49 @@ role: coordinator
 Hand the work out, ...
 ```
 
+### A project's default mode
+
+A project can name the mode every session in its repository starts with, in
+`.agent-stage-cc.json` at its root:
+
+```json
+{ "mode": "plan" }
+```
+
+The mode is then on from the start, on any machine and for anyone who has the
+mod installed. The agent reads its rules from the first message and is told
+they are the project's, the pane is held to the mode's scene, and a toast
+says the mode is on. `/stage agent` names the default.
+
+- A mode you turn on in the session wins over the default.
+- `/stage agent off` ends it for the rest of the session, a reload of the mod
+  included. The next session starts with it again.
+- A name that is no mode turns nothing on, and `/stage agent` says so.
+- The default is read when a session starts, so a change to it takes hold in
+  the next session.
+
+Each machine needs the mod. A project can register it and turn it on for
+everyone in its `.claude/settings.json`; Claude Code registers the marketplace
+once you trust the folder, and each person still installs the mod once (see
+[Install](#install)):
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "agent-stage-cc": { "source": { "source": "github", "repo": "Davv7d/agent-stage-cc" } }
+  },
+  "enabledPlugins": { "agent-stage-cc@agent-stage-cc": true }
+}
+```
+
 ### What a mode is and is not
 
 The mod hands the rules to the agent and draws what the agent then does. It
 checks nothing and enforces nothing: a mode is an instruction, as `CLAUDE.md`
 is, and how closely it is followed is up to the model. A project's mode file
-is read only when you turn that mode on. The rules reach the agent with your
-next message, and they head every new thread of the session while the mode is
-on.
+is read only when you turn that mode on, or when the project names it as its
+default. The rules reach the agent with your next message, and they head
+every new thread of the session while the mode is on.
 
 ## Two scenes
 
@@ -223,7 +267,7 @@ Without a resource the scene simply has no ring.
 | Command | What it does |
 | --- | --- |
 | `/stage` | Open the pane |
-| `/stage agent` | List the working modes and say which is on |
+| `/stage agent` | List the working modes, say which is on and which is the project's default |
 | `/stage agent <mode>`, `/stage agent off` | Turn a working mode on for this session, or off |
 | `/stage view auto`, `team`, `plan` | Choose the scene; `auto` picks by who is at work |
 | `/stage demo`, `/stage demo plan`, `/stage live` | An invented team, an invented plan, or real data |
@@ -259,6 +303,7 @@ Everything is optional.
 
 ```json
 {
+  "mode": "plan",
   "testCommands": ["\\./scripts/run-checks\\.sh\\b"],
   "coordinatorTools": ["^delegate_task$"]
 }
@@ -266,8 +311,9 @@ Everything is optional.
 
 Both lists are regular expressions. `testCommands` replaces the built-in
 recognition of common test runners; `coordinatorTools` names the tools that
-hand work to another agent. Nothing about any particular project lives in the
-mod itself.
+hand work to another agent. `mode` names the working mode every session in
+the repository starts with; see [A project's default mode](#a-projects-default-mode).
+Nothing about any particular project lives in the mod itself.
 
 The scene speaks English or Polish. It follows your system: the locale in the
 session's environment and, where an app has none, the language macOS or
