@@ -2,8 +2,9 @@
 // files that let any later session in the project work well, on any machine
 // and for anyone. It lives apart from the other texts only for its length.
 // What it says of Claude Code was checked against code.claude.com/docs:
-// memory (AGENTS.md, @ imports), skills, permissions, settings, mcp, chrome,
-// desktop (the Browser pane, `.claude/launch.json`) and sandboxing.
+// memory (AGENTS.md, @ imports), skills, permissions, settings-reference,
+// mcp, chrome, desktop (the Browser pane, `.claude/launch.json`), sandboxing
+// and plugins/org (plugins a repository turns on).
 
 export const INIT = `# Set the project up for agents
 
@@ -27,6 +28,7 @@ Ask a few questions at a time, one phase at a time, and offer a sensible default
    - files: only this folder, or other folders too, such as a sibling repository;
    - a browser: the desktop app's built-in browser (a clean profile, for the project's own app; its dev servers are kept in \`.claude/launch.json\`), or the Claude in Chrome extension (the person's own Chrome, signed in as them);
    - MCP servers, such as an issue tracker or a database;
+   - plugins, the Agent Stage (\`agent-stage-cc\`) among them: a project's default mode is on only where it is installed;
    - the network: whether shell commands may reach outside hosts, and which;
    - Docker or other containers: whether agents may run, change and remove them;
    - a shared resource only one agent may use at a time, such as a local stack of containers or a test device.
@@ -37,10 +39,11 @@ Ask a few questions at a time, one phase at a time, and offer a sensible default
    - \`CLAUDE.md\` at the root, opening with the line \`@AGENTS.md\` (written bare, not in backticks, or it is not imported), followed only by what is for Claude Code alone. Claude Code reads AGENTS.md by itself only where no CLAUDE.md or CLAUDE.local.md is present, and older versions not at all; the import keeps it read in every case, and never twice. Where a CLAUDE.md exists, add the import at its top instead of replacing it.
    - Project skills, each in \`.claude/skills/<name>/SKILL.md\`, opening with \`name\` (the folder's name, which is also its \`/\` command) and \`description\` (what it does and when to use it) between two lines of \`---\`. Write one only for a real procedure with real steps, such as running the tests, committing and releasing, or starting the app. Few skills are better than empty ones.
    - \`.claude/settings.json\`, only as the person approved it: \`permissions\` with \`allow\` and \`deny\` rules (for example \`Bash(<the test command> *)\` or \`Read(./.env)\`; deny wins over allow), and \`additionalDirectories\` for other folders, as relative paths such as \`../shared\`. Where shell commands must be kept off the network, add \`sandbox\` with \`"enabled": true\` and \`network.allowedDomains\`: a permission rule does not stop every way a command reaches a host. What is one person's own goes in \`.claude/settings.local.json\`, kept out of git.
+   - In the same file, the plugins the project relies on: each marketplace under \`extraKnownMarketplaces\`, each plugin as \`"<name>@<marketplace>": true\` under \`enabledPlugins\`. That registers and turns them on but does not install them: each person still runs \`claude plugin install <name>@<marketplace> --scope project\` once.
    - \`.mcp.json\` at the root, where MCP servers are wanted: \`{ "mcpServers": { ... } }\`, with every key or token written as \`\${VARIABLE}\`, never its value.
    - \`.agent-stage-cc.json\` at the root: \`"mode"\`, the project's default working mode, and \`"testCommands"\`, only where the tests run through a script of the project's own: regular expressions for those commands, which replace the stage's recognition of common test runners.
    - A mode of the project's own, in \`.agent-stage-cc/modes/<name>.md\`, only if the person wants one.
    Never overwrite an existing file without showing the change and getting a yes. Put no secrets in any file, and nothing that holds on one machine only, such as an absolute path or a user name.
-8. **Check.** Confirm that each file is where Claude Code reads it and is well formed: every JSON file parses, every skill has its frontmatter, CLAUDE.md imports AGENTS.md. Report what was written and what was left out. Then list what the person must do by hand, for example: install the Claude in Chrome extension and turn it on with \`/chrome\` (a project cannot turn it on); set the environment variables the MCP servers read, and approve those servers when Claude Code asks; sign in to the services they use; accept the workspace trust dialog where Claude Code shows one, without which the project's allow rules and additional directories do not apply. Instruction files are read when a session starts, so the setup is best tried in a new one.
+8. **Check.** Confirm that each file is where Claude Code reads it and is well formed: every JSON file parses, every skill has its frontmatter, CLAUDE.md imports AGENTS.md. Report what was written and what was left out. Then list what the person must do by hand, for example: install the plugins the project enables; install the Claude in Chrome extension and turn it on with \`/chrome\` (a project cannot turn it on); set the environment variables the MCP servers read, and approve those servers when Claude Code asks; sign in to the services they use; accept the workspace trust dialog where Claude Code shows one, without which the project's allow rules and additional directories do not apply. Instruction files are read when a session starts, so the setup is best tried in a new one.
 
 If the person changes an answer, go back to the phase it affects and say so.`

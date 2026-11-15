@@ -38,7 +38,11 @@ test('init writes each file where Claude Code reads it, and asks before it chang
     '`AGENTS.md`', '`CLAUDE.md`', '`@AGENTS.md`', '`.claude/skills/<name>/SKILL.md`', '`name`', '`description`',
     '`.claude/settings.json`', '`allow`', '`deny`', '`additionalDirectories`', '`.claude/settings.local.json`',
     '`.mcp.json`', '`${VARIABLE}`', '`.agent-stage-cc.json`', '`"mode"`', '`"testCommands"`',
+    '`extraKnownMarketplaces`', '`enabledPlugins`',
   ]) expect(text).toContain(part)
+  // A project's default mode needs the mod on each machine: the project names it, each person installs it.
+  expect(text).toContain('the Agent Stage (`agent-stage-cc`) among them')
+  expect(text).toContain('does not install them')
   // Instructions ask and settings enforce: the person is told which is which.
   expect(text).toContain('only asks the model')
   expect(text).toContain('enforced by Claude Code')
