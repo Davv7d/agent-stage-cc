@@ -349,7 +349,7 @@ test('a working mode is turned on by name and its rules reach the agent', async 
 
   await $.session.start({ cwd: TOP, surface: 'desktop', isInteractive: true })
   expect((await run('agent')).text).toBe(
-    'Working modes: audit (yours), coordinate (built-in), full (project), plan (built-in). None is on. Start one with /stage agent <name>, end it with /stage agent off.',
+    'Working modes: audit (yours), coordinate (built-in), full (project), init (built-in), plan (built-in). None is on. Start one with /stage agent <name>, end it with /stage agent off.',
   )
   expect((await sections()).some(s => s.id === 'agent-stage-cc:mode')).toBe(false)
 

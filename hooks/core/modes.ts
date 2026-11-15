@@ -1,6 +1,7 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { ViewMode } from '../../types'
+import { INIT } from './init'
 
 // A working mode is a way of working, written down: rules a person turns on
 // for a session with `/stage agent <name>`. The mod hands the rules to the
@@ -103,6 +104,7 @@ export const BUILT_IN: readonly Mode[] = [
   toMode('plan', PLAN, 'built-in'),
   toMode('full', FULL, 'built-in'),
   toMode('coordinate', COORDINATE, 'built-in'),
+  toMode('init', INIT, 'built-in'),
 ].filter((m): m is Mode => m !== undefined)
 
 async function modesIn($: EngineInterface, dir: string, from: Mode['from']): Promise<Mode[]> {

@@ -50,7 +50,7 @@ test('coordinating is a mode too: tasks in, work out, the shared resource kept i
 })
 
 test('the built-in modes: plan first, the whole task in one run, and coordinating', async () => {
-  expect(BUILT_IN.map(m => m.name)).toEqual(['plan', 'full', 'coordinate'])
+  expect(BUILT_IN.map(m => m.name)).toEqual(['plan', 'full', 'coordinate', 'init'])
   expect(BUILT_IN.slice(0, 2).map(m => m.view)).toEqual(['plan', 'plan'])
   const plan = BUILT_IN[0]?.text ?? ''
   // The phases a person asked for, in order, and the stop before the work.
@@ -60,8 +60,9 @@ test('the built-in modes: plan first, the whole task in one run, and coordinatin
   expect(plan).toContain('Then stop and wait')
   expect(plan).toContain('task list')
   expect(BUILT_IN[1]?.text).toContain('without stopping for approval')
-  // Nothing of any one project is in them.
-  for (const mode of BUILT_IN) expect(/npm|docker|pytest|yarn|make /i.test(mode.text)).toBe(false)
+  // Nothing of any one project is in them: init names Docker only to ask whether agents may run it.
+  for (const mode of BUILT_IN) expect(/npm|pytest|yarn|make /i.test(mode.text)).toBe(false)
+  for (const mode of BUILT_IN.filter(m => m.name !== 'init')) expect(/docker/i.test(mode.text)).toBe(false)
 })
 
 test("a project's mode wins over a person's, and a person's over a built-in one", async () => {
@@ -69,10 +70,10 @@ test("a project's mode wins over a person's, and a person's over a built-in one"
   const theirs = toMode('plan', '# Team plan\n\nTheirs.', 'project')
   const extra = toMode('audit', 'Audit.', 'yours')
   if (mine === undefined || theirs === undefined || extra === undefined) throw new Error('a mode did not read')
-  expect(mergeModes(BUILT_IN, [mine, extra]).map(m => `${m.name}:${m.from}`)).toEqual(['audit:yours', 'coordinate:built-in', 'full:built-in', 'plan:yours'])
+  expect(mergeModes(BUILT_IN, [mine, extra]).map(m => `${m.name}:${m.from}`)).toEqual(['audit:yours', 'coordinate:built-in', 'full:built-in', 'init:built-in', 'plan:yours'])
   expect(mergeModes(BUILT_IN, [mine], [theirs]).find(m => m.name === 'plan')?.title).toBe('Team plan')
   expect(describeModes(mergeModes(BUILT_IN), undefined)).toBe(
-    'Working modes: coordinate (built-in), full (built-in), plan (built-in). None is on. Start one with /stage agent <name>, end it with /stage agent off.',
+    'Working modes: coordinate (built-in), full (built-in), init (built-in), plan (built-in). None is on. Start one with /stage agent <name>, end it with /stage agent off.',
   )
   expect(describeModes(mergeModes(BUILT_IN), 'plan')).toContain('On now: plan.')
 })
