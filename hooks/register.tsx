@@ -8,7 +8,7 @@ import type { Notice } from './core/brief'
 import { DEFAULTS, GLOBAL_CONFIG, GUIDE, PROJECT_CONFIG, readConfig, readProjectConfig, viewOf } from './core/config'
 import type { Config } from './core/config'
 import { demoPlanSnapshot, demoSnapshot, demoUsage } from './core/demo'
-import { describeModes, loadModes, MODE_ENDED, modeBrief } from './core/modes'
+import { describeModes, loadModes, MODE_ENDED, modeBrief, startingMode } from './core/modes'
 import type { Mode } from './core/modes'
 import { isPlanTool, isSessionList } from './core/plan'
 import { classify, DEFAULT_PATTERNS } from './core/derive'
@@ -109,6 +109,8 @@ const demo = atom({ plugin: 'agent-stage-cc', key: 'demo' } as const, false)
 const viewMode = atom({ plugin: 'agent-stage-cc', key: 'viewMode' } as const, null)
 /** The working mode turned on for the session, by name: kept over a reload. */
 const workMode = atom({ plugin: 'agent-stage-cc', key: 'workMode' } as const, null)
+/** That mode is the project's default, on from the start, not one the person turned on. */
+const isWorkModeDefault = atom({ plugin: 'agent-stage-cc', key: 'isWorkModeDefault' } as const, false)
 const briefNow = atom({ plugin: 'agent-stage-cc', key: 'brief' } as const, null, { shape: 'brief-4' })
 const bandHidden = atom({ plugin: 'agent-stage-cc', key: 'bandHidden' } as const, false)
 
@@ -145,8 +147,12 @@ type Self = {
   isDemo: boolean
   /** Which invented data the demo shows. */
   demoKind: 'team' | 'plan'
-  /** The working mode the person turned on for this session. */
+  /** The working mode the person turned on for this session, or the project's default. */
   mode: Mode | null
+  /** The mode on is the project's default, not one the person turned on. */
+  isModeDefault: boolean
+  /** The default mode the project's `.agent-stage-cc.json` names, on offer or not. */
+  projectMode: string | undefined
   lang: Lang
   /** The language the machine itself is set to; the config may name another. */
   systemLang: Lang
@@ -317,23 +323,30 @@ async function modesHere($: EngineInterface, self: Self): Promise<Mode[]> {
 async function modeCommand($: EngineInterface, self: Self, wanted: string | undefined): Promise<{ text: string; context?: string[] }> {
   const modes = await modesHere($, self)
   const name = wanted?.toLowerCase()
-  if (name === undefined || name === '') return { text: describeModes(modes, self.mode?.name) }
+  if (name === undefined || name === '') return { text: describeModes(modes, self.mode?.name, self.projectMode) }
   if (name === 'off') {
     const was = self.mode
     self.mode = null
+    self.isModeDefault = false
     await update($, workMode, () => null)
+    await update($, isWorkModeDefault, () => false)
     // The view the mode held goes back to the config's.
     if (was !== null) await update($, viewMode, () => null)
     await emit($, self, at => ({ kind: 'mode', at, name: null }))
     await refresh($, self)
 
-    return was === null ? { text: 'No working mode was on.' } : { text: `Working mode "${was.name}" is off.`, context: [MODE_ENDED] }
+    // Off is off for the session: the project's default waits for the next one.
+    const stays = modes.some(m => m.name === self.projectMode) ? ` The project's default, ${self.projectMode ?? ''}, stays off until this session ends.` : ''
+
+    return was === null ? { text: `No working mode was on.${stays}` } : { text: `Working mode "${was.name}" is off.${stays}`, context: [MODE_ENDED] }
   }
   const mode = modes.find(m => m.name === name)
-  if (mode === undefined) return { text: `No working mode "${name}". ${describeModes(modes, self.mode?.name)}` }
+  if (mode === undefined) return { text: `No working mode "${name}". ${describeModes(modes, self.mode?.name, self.projectMode)}` }
   self.mode = mode
+  self.isModeDefault = false
   self.writtenAt = 0
   await update($, workMode, () => mode.name)
+  await update($, isWorkModeDefault, () => false)
   await emit($, self, at => ({ kind: 'mode', at, name: mode.name, ...(mode.role === undefined ? {} : { role: mode.role }) }))
   // A mode is watched on the scene it names: its own agent's plan, or the team.
   await update($, viewMode, () => mode.view)
@@ -343,6 +356,34 @@ async function modeCommand($: EngineInterface, self: Self, wanted: string | unde
   return {
     text: `Working mode "${mode.name}" is on (${mode.title}). Say what you want done.`,
     context: [modeBrief(mode)],
+  }
+}
+
+/**
+ * The mode the session starts in: the one kept over a reload, none if the
+ * person turned it off, or else the project's default, which is then kept,
+ * drawn, watched on its scene and told, once a session.
+ */
+async function startMode($: EngineInterface, self: Self, isInteractive: boolean): Promise<void> {
+  try {
+    // Never written: nothing was turned on or off in this session yet.
+    const kept = (await $.state.get({ plugin: 'agent-stage-cc', key: 'workMode' } as const)).value
+    const start = startingMode(await modesHere($, self).catch(() => []), kept, self.projectMode, await read($, isWorkModeDefault))
+    self.mode = start?.mode ?? null
+    self.isModeDefault = start?.isProjectDefault === true
+    // A reload finds the default kept, and says nothing twice.
+    if (start === null || !start.isProjectDefault || kept === start.mode.name) return
+    const mode = start.mode
+    await update($, workMode, () => mode.name)
+    await update($, isWorkModeDefault, () => true)
+    self.writtenAt = 0
+    await emit($, self, at => ({ kind: 'mode', at, name: mode.name, ...(mode.role === undefined ? {} : { role: mode.role }) }))
+    // Watched on the scene it names, unless the person picked one in this session.
+    const picked = await $.state.get({ plugin: 'agent-stage-cc', key: 'viewMode' } as const)
+    if (picked.value === undefined) await update($, viewMode, () => mode.view)
+    if (isInteractive) $.ui.toast(`Working mode "${mode.name}" is on: the project's default. /stage agent off ends it.`)
+  } catch {
+    // A session starts whatever its mode; it can still be turned on by name.
   }
 }
 
@@ -357,6 +398,7 @@ async function loadConfig($: EngineInterface, self: Self): Promise<void> {
   self.lang = self.config.language === 'auto' ? self.systemLang : self.config.language
   const theirs = self.who === undefined ? '' : await $.fs.read(`${self.who.worktree}/${PROJECT_CONFIG}`).catch(() => '')
   const project = theirs === '' ? {} : readProjectConfig(theirs)
+  self.projectMode = project.mode
   self.patterns = {
     test: project.test ?? DEFAULT_PATTERNS.test,
     coordinate: project.coordinate ?? DEFAULT_PATTERNS.coordinate,
@@ -536,7 +578,7 @@ async function resourceAction(
 export const register: Register = on => {
   const self: Self = {
     who: undefined, rec: undefined, written: '', writtenAt: 0, isLocated: false,
-    shown: '', stage: null, polls: 0, isDemo: false, demoKind: 'team', mode: null, lang: 'en', systemLang: 'en', utcOffsetMinutes: 0,
+    shown: '', stage: null, polls: 0, isDemo: false, demoKind: 'team', mode: null, isModeDefault: false, projectMode: undefined, lang: 'en', systemLang: 'en', utcOffsetMinutes: 0,
     pane: '', paneWritten: '', images: null, config: DEFAULTS, patterns: DEFAULT_PATTERNS, last: null, briefShown: '',
     machine: undefined, cpuSeconds: null, system: null, sampledAt: 0, containers: {}, usage: null, limits: [], sessionId: '', trouble: '',
   }
@@ -554,12 +596,13 @@ export const register: Register = on => {
       isDeferred: false,
     })
     await readLocale($, self)
+    // Located first, so that the project's own file is read with the person's.
+    if (!self.isLocated) await $.clock.now().then(at => locateSelf($, self, at)).catch(() => undefined)
     await loadConfig($, self).catch(() => undefined)
     self.isDemo = await read($, demo)
-    const kept = await read($, workMode)
-    if (typeof kept === 'string') self.mode = (await modesHere($, self).catch(() => [])).find(m => m.name === kept) ?? null
     const sessionId = await $.session.id()
     await emit($, self, at => ({ kind: 'session-start', at, sessionId }))
+    await startMode($, self, e.isInteractive)
     void refresh($, self)
     $.clock.every(self.config.refreshMs, () => void refresh($, self))
 
@@ -570,7 +613,7 @@ export const register: Register = on => {
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)
     // A working mode's rules head every new thread while the mode is on.
-    const mode = self.mode === null ? [] : [{ id: 'agent-stage-cc:mode', text: modeBrief(self.mode), scope: 'session' as const }]
+    const mode = self.mode === null ? [] : [{ id: 'agent-stage-cc:mode', text: modeBrief(self.mode, self.isModeDefault), scope: 'session' as const }]
     const guide = self.config.guide ? [{ id: 'agent-stage-cc:guide', text: GUIDE, scope: 'session' as const }] : []
 
     return { sections: [...composed.sections, ...guide, ...mode] }

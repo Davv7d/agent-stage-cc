@@ -137,15 +137,47 @@ export async function loadModes($: EngineInterface, home: string | undefined, wo
 }
 
 /** What the agent is told when a mode is turned on, and at the head of each new thread. */
-export const modeBrief = (mode: Mode) =>
+export const modeBrief = (mode: Mode, isProjectDefault = false) =>
   `# Agent Stage: working mode \`${mode.name}\`
 
-The person turned on the working mode \`${mode.name}\` for this session. From now on work by the rules below, until the person says otherwise. They say how to keep your task list: the Agent Stage draws it for the person as you go.
+${isProjectDefault
+    ? `This project starts every session in the working mode \`${mode.name}\` (its \`.agent-stage-cc.json\` says so), and this session is in it; the person can end it with \`/stage agent off\`.`
+    : `The person turned on the working mode \`${mode.name}\` for this session.`} From now on work by the rules below, until the person says otherwise. They say how to keep your task list: the Agent Stage draws it for the person as you go.
 
 ${mode.text}`
 
 export const MODE_ENDED = 'The person turned the Agent Stage working mode off. Its rules no longer apply; work as you otherwise would.'
 
+/**
+ * The mode a session starts with. One the person turned on in the session wins
+ * over the project's default, and one they turned off stays off until the
+ * session ends. `kept` is what the session holds: a mode's name, null once the
+ * person turned the mode off, undefined while nothing was turned on or off;
+ * `isKeptDefault`, that the kept mode was the project's default. A kept name
+ * that is no longer on offer leaves the project's default to stand.
+ */
+export function startingMode(
+  modes: readonly Mode[],
+  kept: string | null | undefined,
+  projectDefault: string | undefined,
+  isKeptDefault = false,
+): { mode: Mode; isProjectDefault: boolean } | null {
+  if (kept === null) return null
+  const chosen = modes.find(m => m.name === kept)
+  if (chosen !== undefined) return { mode: chosen, isProjectDefault: isKeptDefault }
+  const fallback = modes.find(m => m.name === projectDefault)
+
+  return fallback === undefined ? null : { mode: fallback, isProjectDefault: true }
+}
+
+/** What `/stage agent` says of the project's default mode; nothing where the project names none. */
+export const describeDefault = (modes: readonly Mode[], name: string | undefined) =>
+  name === undefined
+    ? ''
+    : modes.some(m => m.name === name)
+      ? ` The project's default: ${name}.`
+      : ` The project's default "${name}" is not a mode on offer, so it was not turned on.`
+
 /** The modes as one line for a person: each name and where it comes from. */
-export const describeModes = (modes: readonly Mode[], current: string | undefined) =>
-  `Working modes: ${modes.map(m => `${m.name} (${m.from})`).join(', ')}. ${current === undefined ? 'None is on.' : `On now: ${current}.`} Start one with /stage agent <name>, end it with /stage agent off.`
+export const describeModes = (modes: readonly Mode[], current: string | undefined, projectDefault?: string) =>
+  `Working modes: ${modes.map(m => `${m.name} (${m.from})`).join(', ')}. ${current === undefined ? 'None is on.' : `On now: ${current}.`}${describeDefault(modes, projectDefault)} Start one with /stage agent <name>, end it with /stage agent off.`

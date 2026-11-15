@@ -48,6 +48,8 @@ export type ProjectConfig = {
   testCommands?: string[]
   /** Regular expressions: a tool whose name matches one hands work to another agent. */
   coordinatorTools?: string[]
+  /** The working mode every session in the repository starts with, by name. */
+  mode?: string
 }
 
 export const GLOBAL_CONFIG = '.config/agent-stage-cc/config.json'
@@ -106,16 +108,31 @@ const patterns = (value: unknown): RegExp[] | undefined => {
   return found
 }
 
-/** A project's patterns as the classifier takes them; undefined keeps the built-in ones. */
-export function readProjectConfig(text: string): { test?: RegExp[]; coordinate?: RegExp[] } {
+/** The default mode's name as a project wrote it, in any case; a value that is no text, or empty, names none. */
+const modeOf = (value: unknown): string | undefined => {
+  const name = typeof value === 'string' ? value.trim().toLowerCase().slice(0, 40) : ''
+
+  return name === '' ? undefined : name
+}
+
+/**
+ * A project's patterns as the classifier takes them, undefined to keep the
+ * built-in ones, and its default mode by name, known to exist or not.
+ */
+export function readProjectConfig(text: string): { test?: RegExp[]; coordinate?: RegExp[]; mode?: string } {
   try {
     const parsed: unknown = JSON.parse(text)
     if (typeof parsed !== 'object' || parsed === null) return {}
     const raw = parsed as Record<string, unknown>
     const test = patterns(raw.testCommands)
     const coordinate = patterns(raw.coordinatorTools)
+    const mode = modeOf(raw.mode)
 
-    return { ...(test === undefined ? {} : { test }), ...(coordinate === undefined ? {} : { coordinate }) }
+    return {
+      ...(test === undefined ? {} : { test }),
+      ...(coordinate === undefined ? {} : { coordinate }),
+      ...(mode === undefined ? {} : { mode }),
+    }
   } catch {
     return {}
   }

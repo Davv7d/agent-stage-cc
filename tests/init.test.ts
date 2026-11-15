@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { INIT } from '../hooks/core/init'
-import { BUILT_IN } from '../hooks/core/modes'
+import { BUILT_IN, describeModes, mergeModes, modeBrief, startingMode, toMode } from '../hooks/core/modes'
 import type { Mode } from '../hooks/core/modes'
 
 const builtIn = (name: string): Mode => {
@@ -47,4 +47,50 @@ test('init writes each file where Claude Code reads it, and asks before it chang
   // Every way of working a project may start in is offered, and the tools it may need.
   for (const name of ['plan', 'full', 'coordinate', 'research']) expect(text).toContain(`\`${name}\``)
   for (const tool of ['Claude in Chrome', "desktop app's built-in browser", 'MCP servers', 'Docker', 'shared resource']) expect(text).toContain(tool)
+})
+
+test("a session starts in the person's mode, in none once they ended it, or else in the project's default", async () => {
+  const own = toMode('review', '# Review\n\nRead the diff.', 'project')
+  if (own === undefined) throw new Error('a mode did not read')
+  const modes = mergeModes(BUILT_IN, [own])
+  const start = (kept: string | null | undefined, projectDefault: string | undefined, isKeptDefault = false) => {
+    const found = startingMode(modes, kept, projectDefault, isKeptDefault)
+
+    return found === null ? null : `${found.mode.name}${found.isProjectDefault ? ' (default)' : ''}`
+  }
+  // Nothing turned on or off in the session: the project's default, its own modes too.
+  expect(start(undefined, 'plan')).toBe('plan (default)')
+  expect(start(undefined, 'review')).toBe('review (default)')
+  // The person's pick wins over it, the same mode included.
+  expect(start('full', 'plan')).toBe('full')
+  expect(start('plan', 'plan')).toBe('plan')
+  // Kept over a reload, the default is still the default.
+  expect(start('plan', 'plan', true)).toBe('plan (default)')
+  // Turned off, it stays off until the session ends.
+  expect(start(null, 'plan')).toBe(null)
+  // A name that is no mode turns nothing on.
+  expect(start(undefined, 'sprint')).toBe(null)
+  expect(start(undefined, undefined)).toBe(null)
+  // A mode the person kept and that is gone since leaves the default to stand.
+  expect(start('audit', 'plan')).toBe('plan (default)')
+  expect(start('audit', undefined)).toBe(null)
+})
+
+test("/stage agent names the project's default, and says why a name that is no mode is not on", async () => {
+  const modes = mergeModes(BUILT_IN)
+  expect(describeModes(modes, 'plan', 'plan')).toContain("On now: plan. The project's default: plan. Start one with /stage agent <name>")
+  expect(describeModes(modes, undefined, 'sprint')).toContain(
+    'None is on. The project\'s default "sprint" is not a mode on offer, so it was not turned on. Start one with',
+  )
+  expect(describeModes(modes, undefined)).not.toContain('default')
+})
+
+test("the agent is told when its mode is the project's default, and how it ends", async () => {
+  const plan = builtIn('plan')
+  const brief = modeBrief(plan, true)
+  expect(brief).toContain('This project starts every session in the working mode `plan`')
+  expect(brief).toContain('`/stage agent off`')
+  expect(brief).not.toContain('The person turned on')
+  expect(brief.endsWith(plan.text)).toBe(true)
+  expect(modeBrief(plan)).toContain('The person turned on the working mode `plan` for this session.')
 })

@@ -273,6 +273,8 @@ declare module 'claude-code' {
       viewMode: ViewMode | null
       /** The working mode turned on for the session, by name. */
       workMode: string | null
+      /** That mode is the project's default, on from the start, not one the person turned on. */
+      isWorkModeDefault: boolean
     }
   }
 }
