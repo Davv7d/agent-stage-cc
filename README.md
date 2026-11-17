@@ -12,7 +12,7 @@ It is a Claude Code mod (a plugin of function hooks). It reads what agents do
 and never asks them to report anything, it enforces nothing, and it needs no
 configuration to start.
 
-## Three ways to work
+## Ways to work
 
 Start a session, say how you want to work, then say what you want done:
 
@@ -20,11 +20,13 @@ Start a session, say how you want to work, then say what you want done:
 | --- | --- | --- |
 | `/stage agent plan` | Plan first: context, requirements, a proposal, and only after you accept it, the work and a check | The agent's plan, with a gate where it waits for you |
 | `/stage agent full` | The whole task in one run, in stages, without stopping for approval | The agent's plan, moving on its own |
+| `/stage agent research` | Researches a topic you name: the question first, then subagents in parallel, each key claim checked against two sources, and a report with links | The research: its subagents, the searches in flight, the sources found |
 | `/stage agent coordinate` | Takes your tasks in, hands them out to agents in their own worktrees, watches over them and keeps the shared resource in order | The team |
+| `/stage agent init` | Sets a project up for agents: asks what it is for, its technologies, how work is done and what agents may reach, then writes AGENTS.md, skills and settings once you accept | The agent's plan |
 
 ![One agent working through its plan, demo data](docs/plan.gif)
 
-These three are built in. A mode is a Markdown file of rules, so you can
+These are built in. A mode is a Markdown file of rules, so you can
 replace any of them or write your own, for yourself or for a project. See
 [Working modes](#working-modes).
 
@@ -33,10 +35,12 @@ A mode is optional. Without one the stage still shows everything it can read:
 
 ## What you see
 
-- **A pane beside the chat** with one of two scenes. *The team*: a
+- **A pane beside the chat** with one of three scenes. *The team*: a
   coordinator, the agents at work, a queue, the shared resource and open pull
   requests. *A plan*: one agent and the steps of its task list, moving from
-  waiting, through in progress, to done. The layout follows the pane's shape.
+  waiting, through in progress, to done. *Research*: one agent, the subagents
+  it sent out, the searches running at this moment and the sources found. The
+  layout follows the pane's shape.
 - **A row above the prompt** with bare figures in fixed colors: CPU and
   memory, each as the stage's own share and then the whole machine, what is
   left of your Claude rate limits, open questions and failed tests. Hover a
@@ -77,8 +81,9 @@ opens the pane with an invented team that walks through every state, and
 /stage demo plan
 ```
 
-shows one invented agent working through a plan. `/stage live` returns to
-real data.
+shows one invented agent working through a plan. `/stage demo research`
+shows an invented researcher whose subagents start, search and finish while
+the sources pile up. `/stage live` returns to real data.
 
 ## Working modes
 
@@ -91,8 +96,8 @@ want:
 ```
 
 A mode says how the agent works; a view is what the pane draws (see
-[Two scenes](#two-scenes)). Turning a mode on picks the view that suits it,
-so one command is enough. `/stage agent` lists the modes on offer, and
+[Three scenes](#three-scenes)). Turning a mode on picks the view that suits
+it, so one command is enough. `/stage agent` lists the modes on offer, and
 `/stage agent off` ends the one that is on.
 
 ### The built-in modes
@@ -103,6 +108,13 @@ so one command is enough. `/stage agent` lists the modes on offer, and
   once you accept the proposal does the work begin, followed by a check.
 - **`full`**: the whole task in one run. The same stages, without stopping for
   approval between them.
+- **`research`**: you name a topic and the agent researches it. It restates
+  the question and asks where the report should go (in the chat, or a file
+  such as `research/<slug>.md`, made only if you agree) and how deep to go.
+  It splits the topic into sub-questions, sends one subagent after each, at
+  most five at a time unless you say otherwise, checks each key claim against
+  two independent sources, and reports the answer first, then the findings
+  with links, what is uncertain and what was not checked.
 - **`coordinate`**: the session takes your tasks in, splits them, hands each
   piece to an agent in a worktree of its own, watches over them and brings
   their questions and results to you. It also keeps the record of the shared
@@ -120,8 +132,9 @@ so one command is enough. `/stage agent` lists the modes on offer, and
 
 `plan` and `full` tell the agent to keep the phases as its task list, so the
 pane shows them as the plan: which phase is in progress, which are done, and
-the gate where the agent waits for you. `coordinate` makes the session the
-coordinator at once and shows the team.
+the gate where the agent waits for you. `research` keeps its phases as a list
+too, and shows the research scene with the phase in progress at its top.
+`coordinate` makes the session the coordinator at once and shows the team.
 
 ### Your own modes
 
@@ -135,8 +148,8 @@ a built-in one, so a `plan.md` of your own replaces the built-in `plan`. The
 file's text is what the agent reads; its first heading is the mode's title.
 
 A mode is watched on its agent's plan unless the file opens with settings
-that say otherwise. The settings are for the stage and are not shown to the
-agent:
+that say otherwise (`view: team` or `view: research`). The settings are for
+the stage and are not shown to the agent:
 
 ```markdown
 ---
@@ -192,9 +205,9 @@ is read only when you turn that mode on, or when the project names it as its
 default. The rules reach the agent with your next message, and they head
 every new thread of the session while the mode is on.
 
-## Two scenes
+## Three scenes
 
-The pane shows one of two scenes, drawn from the same parts.
+The pane shows one of three scenes, drawn from the same parts.
 
 - **The team**: every agent in its zone. Agents keep a fixed place and glide
   between zones as their state changes. An agent that keeps a task list shows
@@ -202,15 +215,35 @@ The pane shows one of two scenes, drawn from the same parts.
 - **A plan**: one agent on the left and its steps in three zones. The step in
   progress is joined to the agent by a line that sparks while the agent
   works, faster for tests than for reading. Finished steps move to the right.
+- **Research**: one agent in the middle and the subagents it sent out on an
+  orbit round it, each labelled with its question. Every search or read in
+  flight throws a spark from the ball that runs it, so you see how many run at
+  once. A shelf collects the sources by domain, lit once a page of one was
+  read. A line beneath shows how many searches ran at once over the last ten
+  minutes, with the peak marked, and a counter says it in words:
+  `in flight: 5 searches · 3 probes · 27 sources`.
 
 The steps are the task list the agent already keeps: `TodoWrite`,
 `TaskCreate` and `TaskUpdate`, or the list tool of the app it runs in. The mod
 reads the calls and asks nothing more of the agent; an agent that keeps no
 list has no plan to show.
 
-Left on `auto`, the pane shows a plan when exactly one agent is in play (not
-asleep, not merged) and keeps a list, and the team otherwise. The switch in
-the pane, `/stage view`, or `"view"` in your config holds it to one scene.
+The research is read off the calls too. A subagent the session starts is a
+probe, named by the description its Agent call gave it, and it is finished
+when its own turn ends. A search is `WebSearch`, `WebFetch`, `Read`, `Grep`,
+`Glob`, a read-only shell command, or a connected server's tool whose name
+says search or fetch. The sources are the domains of the pages fetched and of
+the links searches return, up to 60. The record is kept once the session
+starts a subagent or its pane shows the research scene. What runs is cleared
+when a turn ends, when it is broken off and when the session ends, so no
+count stays behind; with many searches at once the agent's file is written
+at most once a second.
+
+Left on `auto`, the pane shows research when exactly one agent is in play
+(not asleep, not merged) and it is in the `research` mode or has a subagent
+out; a plan when exactly one agent is in play and keeps a list; and the team
+otherwise. The switch in the pane, `/stage view`, or `"view"` in your config
+holds it to one scene.
 
 There is no setting for working step by step or in one run: the scene shows
 what happens. An agent that stops between steps leaves the finished step at a
@@ -269,8 +302,8 @@ Without a resource the scene simply has no ring.
 | `/stage` | Open the pane |
 | `/stage agent` | List the working modes, say which is on and which is the project's default |
 | `/stage agent <mode>`, `/stage agent off` | Turn a working mode on for this session, or off |
-| `/stage view auto`, `team`, `plan` | Choose the scene; `auto` picks by who is at work |
-| `/stage demo`, `/stage demo plan`, `/stage live` | An invented team, an invented plan, or real data |
+| `/stage view auto`, `team`, `plan`, `research` | Choose the scene; `auto` picks by who is at work |
+| `/stage demo`, `/stage demo plan`, `/stage demo research`, `/stage live` | An invented team, plan or research, or real data |
 | `/stage band` | Hide or show the row above the prompt |
 | `/stage status` | The stage as text |
 | `/stage grant <agent>` | Give the shared resource to an agent |
@@ -344,6 +377,8 @@ Early, and built against an early-access plugin API that may change.
 - Working modes are instructions to the model. They have been tested for how
   they are delivered and drawn, not for how faithfully each model follows
   them.
+- The research scene has been checked with demo data and tests, not yet over
+  a long research in a real session.
 - In the desktop app a notification is a toast inside the coordinator's
   session, not a system notification.
 - One skin, Neon. More skins, and skins from your own sprite sheets, are

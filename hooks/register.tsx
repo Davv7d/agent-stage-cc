@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, ToolCallResult } from 'claude-code'
 
 import type { AgentRecord, Limit, ResourceView, Snapshot, Stage, Usage, UsageReport, ViewMode, ViewToggles } from '../types'
 import { bandItems, noticesBetween, statusText, toBrief } from './core/brief'
@@ -7,7 +7,7 @@ import type { Tone } from './core/brief'
 import type { Notice } from './core/brief'
 import { DEFAULTS, GLOBAL_CONFIG, GUIDE, PROJECT_CONFIG, readConfig, readProjectConfig, viewOf } from './core/config'
 import type { Config } from './core/config'
-import { demoPlanSnapshot, demoSnapshot, demoUsage } from './core/demo'
+import { demoPlanSnapshot, demoResearchSnapshot, demoSnapshot, demoUsage } from './core/demo'
 import { describeModes, loadModes, MODE_ENDED, modeBrief, startingMode } from './core/modes'
 import type { Mode } from './core/modes'
 import { isPlanTool, isSessionList } from './core/plan'
@@ -19,6 +19,7 @@ import { EMPTY, newRecord, toSnapshot } from './core/model'
 import type { Identity } from './core/model'
 import { apply } from './core/reduce'
 import type { StageEvent } from './core/reduce'
+import { isSearchCall, sourcesOf } from './core/research'
 import {
   applyOp,
   describeResource,
@@ -44,10 +45,11 @@ import {
 import type { Machine, Sys } from './core/usage'
 import { appleLanguage, langFrom, namesLanguage, WORDS } from './scene/labels'
 import type { Lang } from './scene/labels'
-import { fitLayout, fitPlan } from './scene/layout'
+import { fitLayout, fitPlan, fitResearch } from './scene/layout'
 import type { Layout } from './scene/layout'
 import { neon } from './scene/neon'
 import { renderPlan } from './scene/plan'
+import { renderResearch, researchRows } from './scene/research'
 import { ASK, BAD, WARN } from './scene/skin'
 import { describeScene, MAX_SOURCE, renderScene } from './scene/scene'
 import { advance } from './scene/stage'
@@ -94,6 +96,12 @@ const strings = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []
 /** A change of the last action alone is written at most this often. */
 const QUIET_WRITE_MS = 3000
+/**
+ * A change of the research alone (a search begun or ended) is written at
+ * most this often, however many run at once; the last one is written once
+ * the time is up.
+ */
+const RESEARCH_WRITE_MS = 1000
 
 const snapshot = atom({ plugin: 'agent-stage-cc', key: 'snapshot' } as const, EMPTY, {
   shape: 'snapshot-2',
@@ -121,12 +129,12 @@ const TONES: Record<Tone, string> = {
 }
 
 const VIEWS: Record<Lang, Record<ViewMode, string>> = {
-  en: { auto: 'View: auto', team: 'View: team', plan: 'View: plan' },
-  pl: { auto: 'Widok: auto', team: 'Widok: zespół', plan: 'Widok: plan' },
+  en: { auto: 'View: auto', team: 'View: team', plan: 'View: plan', research: 'View: research' },
+  pl: { auto: 'Widok: auto', team: 'Widok: zespół', plan: 'Widok: plan', research: 'Widok: research' },
 }
 /** Said on the view switch when a plan is asked for and nobody keeps one. */
 const NO_PLAN: Record<Lang, string> = { en: ' (no plan yet)', pl: ' (brak planu)' }
-const NEXT_VIEW: Record<ViewMode, ViewMode> = { auto: 'team', team: 'plan', plan: 'auto' }
+const NEXT_VIEW: Record<ViewMode, ViewMode> = { auto: 'team', team: 'plan', plan: 'research', research: 'auto' }
 
 const TOGGLES: Record<Lang, Record<keyof ViewToggles, string>> = {
   en: { focus: 'Needs attention only', labels: 'State labels', links: 'Links' },
@@ -139,6 +147,12 @@ type Self = {
   rec: AgentRecord | undefined
   written: string
   writtenAt: number
+  /** The research as last written, and whether a write of a later one is due. */
+  researchWritten: string
+  isFlushDue: boolean
+  /** A save is under way, and the record changed again meanwhile. */
+  isSaving: boolean
+  isDirty: boolean
   isLocated: boolean
   /** What the views last got, so an unchanged poll redraws nothing. */
   shown: string
@@ -146,7 +160,7 @@ type Self = {
   polls: number
   isDemo: boolean
   /** Which invented data the demo shows. */
-  demoKind: 'team' | 'plan'
+  demoKind: 'team' | 'plan' | 'research'
   /** The working mode the person turned on for this session, or the project's default. */
   mode: Mode | null
   /** The mode on is the project's default, not one the person turned on. */
@@ -230,10 +244,13 @@ async function locateSelf($: EngineInterface, self: Self, at: number): Promise<v
   }
   const sessionId = await $.session.id()
   const stored = await load($, self.who.stateDir, self.who.id)
+  // This session's research in memory may be ahead of the file, which is written at most once a second.
+  const kept = self.rec !== undefined && self.rec.id === self.who.id && self.rec.sessionId === stored?.sessionId ? self.rec.research : undefined
   self.rec = {
     ...(stored ?? newRecord(self.who, sessionId, at)),
     worktree: self.who.worktree,
     branch: self.who.branch,
+    ...(kept === undefined ? {} : { research: kept }),
   }
 }
 
@@ -248,15 +265,69 @@ async function emit(
     if (self.rec === undefined || self.who === undefined) return
     const before = self.rec
     self.rec = apply(self.rec, make(at))
-    const { updatedAt: _a, lastAction: _b, lastActionAt: _c, ...core } = self.rec
+    const { updatedAt: _a, lastAction: _b, lastActionAt: _c, research, ...core } = self.rec
     const key = JSON.stringify(core)
-    if (key === self.written && at - self.writtenAt < QUIET_WRITE_MS) return
-    self.written = key
-    self.writtenAt = at
-    await save($, self.who.stateDir, self.rec)
-    if (before.state !== self.rec.state) void refresh($, self)
+    // The research alone changes with every search begun or ended: however
+    // many run at once, it is written at most once a second.
+    const isResearchWritten = JSON.stringify(research ?? null) === self.researchWritten
+    if (key === self.written && at - self.writtenAt < (isResearchWritten ? QUIET_WRITE_MS : RESEARCH_WRITE_MS)) {
+      if (!isResearchWritten) flushLater($, self)
+
+      return
+    }
+    await store($, self, at)
+    if (before.state !== self.rec.state || probesOut(before) !== probesOut(self.rec)) void refresh($, self)
   } catch {
     // The stage watches; it never gets in the way of the work.
+  }
+}
+
+const probesOut = (rec: AgentRecord) => rec.research?.probes.filter(p => p.status === 'running').length ?? 0
+
+/**
+ * Writes the record as it is now. Calls that run at once end at once: a save
+ * asked for while one is under way is not made beside it; the one under way
+ * writes the latest record again when it is done.
+ */
+async function store($: EngineInterface, self: Self, at: number): Promise<void> {
+  if (self.rec === undefined || self.who === undefined) return
+  const { updatedAt: _a, lastAction: _b, lastActionAt: _c, research, ...core } = self.rec
+  self.written = JSON.stringify(core)
+  self.researchWritten = JSON.stringify(research ?? null)
+  self.writtenAt = at
+  if (self.isSaving) {
+    self.isDirty = true
+
+    return
+  }
+  self.isSaving = true
+  try {
+    do {
+      self.isDirty = false
+      const [rec, who] = [self.rec, self.who]
+      if (rec === undefined || who === undefined) break
+      await save($, who.stateDir, rec)
+    } while (self.isDirty)
+  } finally {
+    self.isSaving = false
+  }
+}
+
+/** The research's last change is written once its second is up, so no count is left behind. */
+function flushLater($: EngineInterface, self: Self): void {
+  if (self.isFlushDue) return
+  self.isFlushDue = true
+  $.clock.after(RESEARCH_WRITE_MS, () => void flush($, self))
+}
+
+/** Writes what of the research is not written yet. */
+async function flush($: EngineInterface, self: Self): Promise<void> {
+  self.isFlushDue = false
+  try {
+    if (self.rec === undefined || JSON.stringify(self.rec.research ?? null) === self.researchWritten) return
+    await store($, self, await $.clock.now())
+  } catch {
+    // Written with the next change instead.
   }
 }
 
@@ -474,9 +545,16 @@ async function refresh($: EngineInterface, self: Self): Promise<void> {
       self.paneWritten = self.pane
       await $.fs.write(`${self.who.stateDir}/pane.json`, self.pane)
     }
+    const mode = (await read($, viewMode)) ?? self.config.view
+    // A pane held to the research keeps the record of it from now on.
+    if (mode === 'research' && !self.isDemo && self.rec !== undefined && self.rec.research === undefined) {
+      await emit($, self, at => ({ kind: 'research-watch', at }))
+    }
     let next: Snapshot
     if (self.isDemo) {
-      next = self.demoKind === 'plan' ? demoPlanSnapshot(self.polls, now) : demoSnapshot(Math.floor(self.polls / 2), now)
+      next = self.demoKind === 'plan'
+        ? demoPlanSnapshot(self.polls, now)
+        : self.demoKind === 'research' ? demoResearchSnapshot(self.polls, now) : demoSnapshot(Math.floor(self.polls / 2), now)
       self.usage = demoUsage(next)
     } else {
       if (self.who === undefined) return
@@ -500,7 +578,6 @@ async function refresh($: EngineInterface, self: Self): Promise<void> {
     }
     await brief($, self, next)
     // The scene is redrawn only when what a person would see has changed.
-    const mode = (await read($, viewMode)) ?? self.config.view
     const stage = advance(self.stage, next, self.usage, now, { view: mode, ...(self.who === undefined ? {} : { self: self.who.id }) })
     if (stage !== self.stage) {
       self.stage = stage
@@ -578,6 +655,7 @@ async function resourceAction(
 export const register: Register = on => {
   const self: Self = {
     who: undefined, rec: undefined, written: '', writtenAt: 0, isLocated: false,
+    researchWritten: 'null', isFlushDue: false, isSaving: false, isDirty: false,
     shown: '', stage: null, polls: 0, isDemo: false, demoKind: 'team', mode: null, isModeDefault: false, projectMode: undefined, lang: 'en', systemLang: 'en', utcOffsetMinutes: 0,
     pane: '', paneWritten: '', images: null, config: DEFAULTS, patterns: DEFAULT_PATTERNS, last: null, briefShown: '',
     machine: undefined, cpuSeconds: null, system: null, sampledAt: 0, containers: {}, usage: null, limits: [], sessionId: '', trouble: '',
@@ -587,7 +665,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'stage',
       description: 'Open the Agent Stage pane',
-      argumentHint: '[agent <mode>|demo [plan]|live|view <auto|team|plan>|band|status|grant <agent>|release|queue <agent>|order <agents>]',
+      argumentHint: '[agent <mode>|demo [plan|research]|live|view <auto|team|plan|research>|band|status|grant <agent>|release|queue <agent>|order <agents>]',
     })
     await $.tool.register({
       name: 'resource',
@@ -626,31 +704,67 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // A subagent the session starts is a probe of its research, named by what it was sent for.
+  on('agent.spawn', async ($, e, next) => {
+    const started = await next(e)
+    const id = started.agentId
+    if (id !== undefined) {
+      const label = e.description.trim() || e.name?.trim() || e.subagentType
+      self.writtenAt = 0
+      await emit($, self, at => ({ kind: 'probe-start', at, id, label, isBackground: e.background }))
+    }
+
+    return started
+  }).catch(($, e, next) => next(e))
+
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
+      // What is not written yet is written before the record is read again.
+      await flush($, self)
       self.isLocated = false
       await emit($, self, at => ({ kind: 'turn-start', at }))
+    } else {
+      // A probe woken for another turn is at work again.
+      const id = e.agentId
+      void emit($, self, at => ({ kind: 'probe-start', at, id }))
     }
 
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
-    if (e.agentId === undefined) {
+    const id = e.agentId
+    if (id === undefined) {
       self.writtenAt = 0
       await emit($, self, at => ({ kind: 'turn-end', at, answer: e.answer, reason: e.reason }))
+    } else if (self.rec?.research?.probes.some(p => p.id === id) === true) {
+      // A probe is done when its own turn ends, and the stage is told at once.
+      self.writtenAt = 0
+      await emit($, self, at => ({ kind: 'probe-end', at, id, reason: e.reason }))
     }
 
     return next(e)
   })
 
   on('tool.call', async ($, e, next) => {
-    const action = classify(String(e.tool), e as unknown as Record<string, unknown>, self.patterns)
-    await emit($, self, at => ({ kind: 'tool-start', at, action }))
-    const ran = await next(e)
+    const tool = String(e.tool)
+    const call = e as unknown as Record<string, unknown>
+    const action = classify(tool, call, self.patterns)
+    // A search counts where it runs: in a probe's loop, or the session's own.
+    const where = { ...(e.agentId === undefined ? {} : { loop: e.agentId }), ...(isSearchCall(tool, action) ? { isSearch: true } : {}) }
+    await emit($, self, at => ({ kind: 'tool-start', at, action, ...where }))
+    let ran: ToolCallResult
+    try {
+      ran = await next(e)
+    } catch (error) {
+      // A call that broke off still ends: nothing stays counted as running.
+      await emit($, self, at => ({ kind: 'tool-end', at, action, isError: true, ...where }))
+      throw error
+    }
     const isError = ran.deny !== undefined || ran.isError === true
     const output = ran.deny === undefined && typeof ran.text === 'string' ? ran.text : ''
-    await emit($, self, at => ({ kind: 'tool-end', at, action, isError, output }))
+    const found = where.isSearch === true && !isError ? sourcesOf(tool, call, ran.result, output) : []
+    await emit($, self, at => ({ kind: 'tool-end', at, action, isError, output, ...where, ...(found.length > 0 ? { found } : {}) }))
     // A subagent's own list is not the session's plan; the tasks it files are.
     if (!isError && isPlanTool(String(e.tool)) && (e.agentId === undefined || isSessionList(String(e.tool)))) {
       const input = e as unknown as Record<string, unknown>
@@ -681,17 +795,21 @@ export const register: Register = on => {
     if (verb === 'agent') return modeCommand($, self, rest[0])
     if (verb === 'view') {
       const picked = viewOf(rest[0]?.toLowerCase())
-      if (picked === undefined) return { text: 'Usage: /stage view auto|team|plan' }
+      if (picked === undefined) return { text: 'Usage: /stage view auto|team|plan|research' }
       await update($, viewMode, () => picked)
       await refresh($, self)
       // Asked for a plan where nobody keeps one, the pane would show the team unexplained.
-      const shown = (self.stage?.plan ?? null) === null ? 'the team' : `the plan of ${self.stage?.plan?.agent.id ?? ''}`
+      const research = self.stage?.research ?? null
+      const shown = research !== null
+        ? `the research of ${research.agent.id}`
+        : (self.stage?.plan ?? null) === null ? 'the team' : `the plan of ${self.stage?.plan?.agent.id ?? ''}`
       said = picked === 'plan' && (self.stage?.plan ?? null) === null
         ? ' View: plan. No agent keeps a task list right now, so the team is shown until one does.'
         : ` View: ${picked}, showing ${shown}.`
     } else if (verb === 'demo' || verb === 'live') {
       self.isDemo = verb === 'demo'
-      self.demoKind = rest[0]?.toLowerCase() === 'plan' ? 'plan' : 'team'
+      const kind = rest[0]?.toLowerCase()
+      self.demoKind = kind === 'plan' || kind === 'research' ? kind : 'team'
       self.stage = null
       // Figures of the other mode are not this one's.
       self.usage = null
@@ -725,9 +843,17 @@ export const register: Register = on => {
 
     // A surface without a vector element gets the same facts as a list.
     const marks = { done: '✓', active: '▸', pending: '·' } as const
+    const research = stage.research ?? null
+    // The research's own plan is its phases: listed as a plan's steps are.
+    const steps = stage.plan?.steps ?? (research?.agent.plan ?? []).map((s, i) => ({ key: `${i}`, ordinal: i + 1, text: s.text, status: s.status }))
     const list = (
       <Box flexDirection="column">
-        {(stage.plan?.steps ?? []).map(s => (
+        {(research === null ? [] : researchRows(research, self.lang)).map(row => (
+          <Text key={row.key} color={row.tone === 'bad' ? BAD : row.tone === 'ask' ? ASK : undefined} dimColor={row.isDim === true}>
+            {row.text}
+          </Text>
+        ))}
+        {steps.map(s => (
           <Text key={`step-${s.key}`} dimColor={s.status === 'pending'}>
             {marks[s.status]} {s.ordinal}. {s.text}
           </Text>
@@ -743,8 +869,9 @@ export const register: Register = on => {
     if (e.surface === 'terminal') return list
 
     const plan = stage.plan ?? null
-    const planFit = plan === null ? null : fitPlan(e.props.bodyColumns, e.props.scroll.bodyRows, stage.resource !== null)
-    const { layout, pixelWidth, pixelHeight } = planFit ?? fitLayout(e.props.bodyColumns, e.props.scroll.bodyRows, stage.resource !== null)
+    const researchFit = research === null ? null : fitResearch(e.props.bodyColumns, e.props.scroll.bodyRows)
+    const planFit = plan === null || researchFit !== null ? null : fitPlan(e.props.bodyColumns, e.props.scroll.bodyRows, stage.resource !== null)
+    const { layout, pixelWidth, pixelHeight } = researchFit ?? planFit ?? fitLayout(e.props.bodyColumns, e.props.scroll.bodyRows, stage.resource !== null)
     self.pane = JSON.stringify({
       bodyColumns: e.props.bodyColumns,
       bodyRows: e.props.scroll.bodyRows,
@@ -753,9 +880,11 @@ export const register: Register = on => {
       pixelHeight,
     })
     const options = { ...toggles, lang: self.lang, utcOffsetMinutes: self.utcOffsetMinutes, pixelWidth, pixelHeight }
-    const source = plan !== null && planFit !== null
-      ? renderPlan(stage, plan, planFit.layout, neon, options)
-      : renderScene(stage, layout as Layout, neon, options)
+    const source = research !== null && researchFit !== null
+      ? renderResearch(stage, research, researchFit.layout, neon, options)
+      : plan !== null && planFit !== null
+        ? renderPlan(stage, plan, planFit.layout, neon, options)
+        : renderScene(stage, layout as Layout, neon, options)
     if (source.length > MAX_SOURCE) return list
     const { Svg } = $.ui.resolve(e)
     const names = TOGGLES[self.lang]

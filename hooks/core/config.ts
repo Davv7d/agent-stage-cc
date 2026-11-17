@@ -57,7 +57,7 @@ export const PROJECT_CONFIG = '.agent-stage-cc.json'
 
 /** A view by its name; undefined for anything else. */
 export const viewOf = (value: unknown): ViewMode | undefined =>
-  value === 'auto' || value === 'team' || value === 'plan' ? value : undefined
+  value === 'auto' || value === 'team' || value === 'plan' || value === 'research' ? value : undefined
 
 const bool = (value: unknown, fallback: boolean) => (typeof value === 'boolean' ? value : fallback)
 const within = (value: unknown, low: number, high: number, fallback: number) =>

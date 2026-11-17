@@ -298,6 +298,13 @@ ${meters(levels, layout.meters)}
 /** What a reader who cannot see the drawing is told. */
 export function describeScene(stage: Stage, lang: Lang): string {
   const w = WORDS[lang]
+  const research = stage.research ?? null
+  if (research !== null) {
+    const running = research.probes.filter(p => p.status === 'running')
+    const searches = research.inFlight + running.reduce((sum, p) => sum + p.inFlight, 0)
+
+    return `${research.agent.id}: ${w.state[research.agent.state]}, ${w.research.counter(searches, running.length, research.sources.length, research.sourcesCapped)}`
+  }
   const plan = stage.plan ?? null
   if (plan !== null) {
     const { done, total } = progressOf(plan.agent.plan ?? [])

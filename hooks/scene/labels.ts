@@ -1,4 +1,4 @@
-import type { AgentState } from '../../types'
+import type { AgentState, ProbeStatus } from '../../types'
 
 export type Lang = 'en' | 'pl'
 
@@ -44,7 +44,41 @@ type Words = {
   }
   state: Record<AgentState, string>
   short: Record<AgentState, string>
+  research: ResearchWords
 }
+
+/** What the research scene says. */
+type ResearchWords = {
+  /** What runs now and what was found: searches and probes in flight, sources in all. */
+  counter: (searches: number, probes: number, sources: number, isFull: boolean) => string
+  sources: string
+  noSources: string
+  concurrency: string
+  peak: (n: number) => string
+  probe: Record<ProbeStatus, string>
+  /** Under a probe on the orbit: what it runs now, or how it ended. */
+  probeShort: (status: ProbeStatus, inFlight: number) => string
+  /** For a probe in a card or a list: that, and its calls in all. */
+  probeLine: (status: ProbeStatus, inFlight: number, calls: number) => string
+  summary: (running: number, done: number, stopped: number, failed: number, calls: number) => string
+  /** A subagent known only by its calls. */
+  unnamed: string
+  tile: (domain: string, hits: number, isRead: boolean) => string
+}
+
+/**
+ * The form of a Polish noun after a number: one, a few (2 to 4, but not 12
+ * to 14), or many.
+ */
+export function plPlural(n: number, one: string, few: string, many: string): string {
+  const units = n % 10
+  const tens = n % 100
+  if (n === 1) return one
+
+  return units >= 2 && units <= 4 && (tens < 12 || tens > 14) ? few : many
+}
+
+const enPlural = (n: number, one: string, many: string) => (n === 1 ? one : many)
 
 export const WORDS: Record<Lang, Words> = {
   en: {
@@ -96,6 +130,22 @@ export const WORDS: Record<Lang, Words> = {
       idle: 'idle', research: 'research', coding: 'coding', queue: 'queue',
       testing: 'tests', failed: 'failed', question: 'questions', pr: 'PR', done: 'merged',
     },
+    research: {
+      counter: (searches, probes, sources, isFull) =>
+        `in flight: ${searches} ${enPlural(searches, 'search', 'searches')} · ${probes} ${enPlural(probes, 'probe', 'probes')} · ${sources}${isFull ? '+' : ''} ${enPlural(isFull ? 2 : sources, 'source', 'sources')}`,
+      sources: 'SOURCES',
+      noSources: 'no sources yet',
+      concurrency: 'IN FLIGHT · LAST 10 MIN',
+      peak: n => `peak ${n}`,
+      probe: { running: 'searching', done: 'done', stopped: 'stopped', failed: 'failed' },
+      probeShort: (status, inFlight) => (status === 'running' ? `${inFlight} in flight` : WORDS.en.research.probe[status]),
+      probeLine: (status, inFlight, calls) =>
+        `${WORDS.en.research.probeShort(status, inFlight)} · ${calls} ${enPlural(calls, 'call', 'calls')}`,
+      summary: (running, done, stopped, failed, calls) =>
+        `probes: running ${running} · done ${done}${stopped > 0 ? ` · stopped ${stopped}` : ''}${failed > 0 ? ` · failed ${failed}` : ''} · calls ${calls}`,
+      unnamed: 'subagent',
+      tile: (domain, hits, isRead) => `${domain} · ${isRead ? 'read' : 'found'} · ${hits}×`,
+    },
   },
   pl: {
     coordinator: 'NADZORCA',
@@ -145,6 +195,22 @@ export const WORDS: Record<Lang, Words> = {
     short: {
       idle: 'bezczynni', research: 'research', coding: 'kod', queue: 'kolejka',
       testing: 'testy', failed: 'błędy', question: 'pytania', pr: 'PR', done: 'zmergowane',
+    },
+    research: {
+      counter: (searches, probes, sources, isFull) =>
+        `w toku: ${searches} ${plPlural(searches, 'wyszukiwanie', 'wyszukiwania', 'wyszukiwań')} · ${probes} ${plPlural(probes, 'sonda', 'sondy', 'sond')} · ${sources}${isFull ? '+' : ''} ${plPlural(isFull ? 5 : sources, 'źródło', 'źródła', 'źródeł')}`,
+      sources: 'ŹRÓDŁA',
+      noSources: 'jeszcze brak źródeł',
+      concurrency: 'W TOKU · OSTATNIE 10 MIN',
+      peak: n => `szczyt ${n}`,
+      probe: { running: 'szuka', done: 'gotowa', stopped: 'przerwana', failed: 'błąd' },
+      probeShort: (status, inFlight) => (status === 'running' ? `${inFlight} w toku` : WORDS.pl.research.probe[status]),
+      probeLine: (status, inFlight, calls) =>
+        `${WORDS.pl.research.probeShort(status, inFlight)} · ${calls} ${plPlural(calls, 'wywołanie', 'wywołania', 'wywołań')}`,
+      summary: (running, done, stopped, failed, calls) =>
+        `sondy: w toku ${running} · gotowe ${done}${stopped > 0 ? ` · przerwane ${stopped}` : ''}${failed > 0 ? ` · błędy ${failed}` : ''} · wywołania ${calls}`,
+      unnamed: 'subagent',
+      tile: (domain, hits, isRead) => `${domain} · ${isRead ? 'przeczytane' : 'znalezione'} · ${hits}×`,
     },
   },
 }

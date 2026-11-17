@@ -2,6 +2,7 @@ import type {
   AgentView,
   Place,
   PlanScene,
+  ResearchScene,
   SceneStep,
   StepPlace,
   ViewMode,
@@ -15,6 +16,7 @@ import type {
   UsageReport,
 } from '../../types'
 import { glance } from '../core/plan'
+import { emptyResearch, seriesOf } from '../core/research'
 import { levelsOf } from '../core/usage'
 
 export type { Place, SceneAgent, SceneResource, Slots, Spark, Stage }
@@ -26,6 +28,8 @@ export const QUEUE_SLOTS = 6
 export const PLAN_TODO_SLOTS = 4
 export const PLAN_ACTIVE_SLOTS = 2
 export const PLAN_DONE_SLOTS = 4
+/** Places on a research's orbit; the probes beyond them are counted, not drawn. */
+export const ORBIT_SLOTS = 8
 
 const empty = (): Slots => ({
   work: Array<string | null>(WORK_SLOTS).fill(null),
@@ -73,6 +77,58 @@ export function planAgent(shot: Snapshot, options: StageOptions, prev: Stage | n
 
   // Everyone rests: the plan that was on show stays on show.
   return inPlay.length === 0 ? was : undefined
+}
+
+/** An agent researching now: in the research mode, or with a probe out. */
+const isResearching = (a: AgentView) => a.mode === 'research' || (a.research?.probes.some(p => p.status === 'running') ?? false)
+
+/**
+ * Whose research the pane shows, if any. Asked for, it is the session's own;
+ * left to itself, the stage shows it when one agent alone is in play and that
+ * agent researches: it is in the research mode, or has a probe out.
+ */
+export function researchAgent(shot: Snapshot, options: StageOptions, prev: Stage | null): AgentView | undefined {
+  const view = options.view ?? 'auto'
+  if (view === 'team' || view === 'plan') return undefined
+  const was = shot.agents.find(a => a.id === prev?.research?.agent.id)
+  if (view === 'research') {
+    return shot.agents.find(a => a.id === options.self) ?? was ??
+      shot.agents.find(a => !a.isAsleep && a.research !== undefined) ?? shot.agents.find(a => a.research !== undefined) ??
+      shot.agents.find(a => !a.isAsleep && a.state !== 'done')
+  }
+  const inPlay = shot.agents.filter(a => !a.isAsleep && a.state !== 'done')
+  if (inPlay.length === 1) return inPlay[0] !== undefined && isResearching(inPlay[0]) ? inPlay[0] : undefined
+
+  // Everyone rests: the research that was on show stays on show.
+  return inPlay.length === 0 ? was : undefined
+}
+
+function researchScene(prev: Stage | null, a: AgentView, usage: UsageReport | null, now: number): ResearchScene {
+  const r = a.research ?? emptyResearch(0)
+  const before = prev?.research?.agent.id === a.id ? prev.research : null
+  // The orbit holds every probe at work, then the latest finished ones.
+  const ended = r.probes.filter(p => p.status !== 'running').sort((x, y) => (y.endedAt ?? 0) - (x.endedAt ?? 0))
+  const wanted = [...r.probes.filter(p => p.status === 'running'), ...ended].slice(0, ORBIT_SLOTS).map(p => p.id)
+  const orbit = seat(before?.orbit ?? Array<string | null>(ORBIT_SLOTS).fill(null), wanted)
+  const known = new Set(before?.probes.map(p => p.id) ?? [])
+  const shelved = new Set(before?.sources.map(s => s.domain) ?? [])
+  const { series, peakIndex } = seriesOf(r, now)
+
+  return {
+    agent: toScene(a, false, usage),
+    orbit,
+    probes: r.probes.map(p => ({ id: p.id, label: p.label, status: p.status, inFlight: p.inFlight, calls: p.calls })),
+    fresh: before === null ? [] : wanted.filter(id => !known.has(id)),
+    inFlight: r.inFlight,
+    calls: r.calls,
+    sources: r.sources,
+    sourcesCapped: r.sourcesCapped === true,
+    freshSources: before === null ? [] : r.sources.filter(s => !shelved.has(s.domain)).map(s => s.domain),
+    series,
+    peak: r.peak,
+    peakIndex,
+    more: Math.max(0, r.probes.length - orbit.filter(id => id !== null).length),
+  }
 }
 
 function planScene(prev: Stage | null, a: AgentView, usage: UsageReport | null): PlanScene {
@@ -137,7 +193,10 @@ export function advance(
 ): Stage {
   const lead = shot.agents.find(a => a.role === 'coordinator')
   const coordinator = lead === undefined ? null : toScene(lead, false)
-  const planned = planAgent(shot, options, prev)
+  // An agent's research, when it is on show, takes the place of its plan.
+  const researched = researchAgent(shot, options, prev)
+  const planned = researched === undefined ? planAgent(shot, options, prev) : undefined
+  const found = researched === undefined ? undefined : (researched.research ?? emptyResearch(0))
   // The scene draws one shared resource: the first by name.
   const shared = shot.resources[0]
   const resource: SceneResource | null = shared === undefined
@@ -154,6 +213,14 @@ export function advance(
     agents.map(a => [a.id, a.state, a.isAsleep, a.promptAt, a.prUrl ?? '', a.plan === undefined ? 0 : glance(a.plan), a.mode ?? 0]),
     resource,
     planned === undefined ? 0 : [planned.id, planned.state, planned.isAsleep, planned.plan?.map(s => s.status[0] + s.text), planned.mode ?? 0],
+    researched === undefined || found === undefined
+      ? 0
+      : [
+          researched.id, researched.state, researched.isAsleep, researched.mode ?? 0, researched.plan?.map(s => s.status[0] + s.text) ?? 0,
+          found.probes.map(p => [p.id, p.label, p.status, p.inFlight, p.calls]), found.inFlight, found.calls,
+          found.sources.map(s => [s.domain, s.hits, s.isRead === true ? 1 : 0]), found.sourcesCapped === true ? 1 : 0,
+          found.peak, seriesOf(found, now),
+        ],
   ])
   const isSameScene = prev !== null && prev.key.startsWith(facts)
   const mayFollow = prev === null || prev.levels === null || now - prev.levelsAt >= USAGE_REDRAW_MS
@@ -196,6 +263,7 @@ export function advance(
   }
 
   const plan = planned === undefined ? null : planScene(prev, planned, usage)
+  const research = researched === undefined ? null : researchScene(prev, researched, usage, now)
 
-  return { key, coordinator, agents, resource, slots, places, prevPlaces: prev?.places ?? {}, sparks, plan, levels, levelsAt }
+  return { key, coordinator, agents, resource, slots, places, prevPlaces: prev?.places ?? {}, sparks, plan, research, levels, levelsAt }
 }

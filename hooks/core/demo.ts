@@ -1,5 +1,6 @@
-import type { AgentRecord, AgentState, PlanStep, ResourceView, Snapshot, Usage, UsageReport } from '../../types'
+import type { AgentRecord, AgentState, ConcurrencySample, PlanStep, ResearchProbe, ResearchSource, ResourceView, Snapshot, Usage, UsageReport } from '../../types'
 import { toSnapshot } from './model'
+import { BUCKET_MS, SERIES } from './research'
 
 // A made-up team that walks through every state, for trying the scene and
 // skins without real agents. Every name here is invented.
@@ -123,6 +124,110 @@ export function demoPlanSnapshot(tick: number, now: number): Snapshot {
     v: 1, sessionId: 'demo', isLive: true, id: 'retry-policy', worktree: '/demo/retry-policy', branch: 'feat/retry-policy',
     role: 'agent', state: beat.state, since: now, lastAction: ACTIONS[beat.state], lastActionAt: now,
     promptAt: beat.step, updatedAt: now, plan,
+  }
+
+  return toSnapshot([agent], now, { asleepAfterMs: 1e12 })
+}
+
+/** The research mode's phases, and the tick each begins at; the run rests after the last. */
+const PHASES = [['Question', 0], ['Research plan', 3], ['Gathering', 6], ['Verification', 29], ['Report', 35]] as const
+const RESEARCH_TICKS = 44
+const RESTS_AT = 39
+/** A demo tick stands for this long on the line of what ran at once, so a whole run fits it. */
+const TICK_MS = 15_000
+
+/** The probes the invented researcher sends out: what each asks, and the ticks it starts and ends at. */
+const QUESTIONS = [
+  { label: 'Cycle life by battery chemistry', from: 6, to: 17 },
+  { label: 'Capacity loss in field studies', from: 6, to: 21 },
+  { label: 'How heat and cold change ageing', from: 7, to: 14 },
+  { label: 'What warranties promise', from: 7, to: 18, isFailed: true },
+  { label: 'Recycling and second life', from: 8, to: 23 },
+  { label: 'Cost per stored kWh over the years', from: 15, to: 27 },
+  { label: 'What warranties promise, again', from: 19, to: 28 },
+]
+
+/** Invented domains under the name reserved for examples. */
+const DOMAINS = [
+  'cell-journal', 'grid-stats', 'ev-forum', 'chem-review', 'lab-notes', 'energy-wiki', 'field-data', 'warranty-db',
+  'recycle-hub', 'cold-test', 'solar-guide', 'preprints', 'standards', 'market-watch', 'home-power', 'tech-press',
+  'consumer-test', 'utility-report', 'materials', 'open-data', 'engineering', 'video-talks', 'news-daily', 'gov-energy',
+  'uni-press', 'patents', 'blog-cells', 'review-site', 'sensors', 'insurers',
+].map(name => `${name}.example`)
+
+const probeLoad = (i: number, t: number) => 1 + ((t * 7 + i * 3) % 4)
+
+/** The researcher's own searches and reads at a tick: while it plans and while it checks. */
+function ownLoad(t: number): number {
+  if (t === 0) return 1
+  if (t >= 3 && t < 6) return [2, 3, 1][t - 3] ?? 0
+  if (t >= 29 && t < 35) return [2, 3, 4, 2, 1, 2][t - 29] ?? 0
+
+  return 0
+}
+
+const loadAt = (t: number) =>
+  ownLoad(t) + QUESTIONS.reduce((sum, q, i) => sum + (t >= q.from && t < q.to ? probeLoad(i, t) : 0), 0)
+
+/** How many domains have turned up by a tick. */
+const foundBy = (t: number) => Math.max(0, Math.min(DOMAINS.length, Math.round(t * 0.95) - 2))
+
+/**
+ * One invented agent researching a topic: it asks the person first, sends
+ * out probes, five at a time at most, that start, search and finish (one
+ * fails and is sent again), checks what came back and writes the report,
+ * while the sources pile up.
+ */
+export function demoResearchSnapshot(tick: number, now: number): Snapshot {
+  const t = ((tick % RESEARCH_TICKS) + RESEARCH_TICKS) % RESEARCH_TICKS
+  const phase = PHASES.reduce((at, p, i) => (t >= p[1] ? i : at), 0)
+  const isResting = t >= RESTS_AT
+  const plan: PlanStep[] = PHASES.map(([text], i) =>
+    isResting || i < phase ? { text, status: 'done', doneAt: i + 1 } : i === phase ? { text, status: 'active' } : { text, status: 'pending' },
+  )
+  const state: AgentState = isResting ? 'idle' : t === 1 || t === 2 ? 'question' : phase === 4 ? 'coding' : 'research'
+  const action: Partial<Record<AgentState, string>> = {
+    research: phase === 3 ? 'WebFetch https://cell-journal.example/…' : 'WebSearch home battery lifespan',
+    question: 'asked a question', coding: 'Write home-batteries.md',
+  }
+  const probes: ResearchProbe[] = QUESTIONS.flatMap((q, i) => {
+    if (t < q.from) return []
+    const isRunning = t < q.to
+    let calls = 0
+    for (let k = q.from; k <= Math.min(t, q.to - 1); k++) calls += probeLoad(i, k) * 2
+    const base = { id: `demo-probe-${i + 1}`, label: q.label, inFlight: isRunning ? probeLoad(i, t) : 0, calls, startedAt: now - (t - q.from) * TICK_MS }
+
+    return [isRunning ? { ...base, status: 'running' as const } : { ...base, status: q.isFailed === true ? 'failed' as const : 'done' as const, endedAt: now - (t - q.to) * TICK_MS }]
+  })
+  const sources: ResearchSource[] = DOMAINS.slice(0, foundBy(t)).map((domain, i) => {
+    const since = Array.from({ length: t + 1 }, (_, k) => k).find(k => foundBy(k) > i) ?? t
+    const isRead = i % 3 === 0 || (t >= 29 && i % 3 === 1)
+
+    return { domain, hits: Math.min(6, 1 + Math.floor((t - since) / 5)), ...(isRead ? { isRead: true as const } : {}) }
+  })
+  // What ran at once: each tick holds its level for the time it stands for.
+  const tickAt = (time: number) => t - Math.floor((now - time) / TICK_MS)
+  const end = Math.floor(now / BUCKET_MS) * BUCKET_MS
+  const history: ConcurrencySample[] = []
+  for (let j = 0; j < SERIES; j++) {
+    const at = end - (SERIES - 1 - j) * BUCKET_MS
+    const ticks = [tickAt(at), tickAt(Math.min(now, at + BUCKET_MS - 1))].filter(k => k >= 0)
+    const n = Math.max(0, ...ticks.map(loadAt))
+    if (n > 0) history.push({ at, n })
+  }
+  let peak = 0
+  let peakTick = 0
+  for (let k = 0; k <= t; k++) {
+    if (loadAt(k) > peak) [peak, peakTick] = [loadAt(k), k]
+  }
+  const agent: AgentRecord = {
+    v: 1, sessionId: 'demo', isLive: true, id: 'home-batteries', worktree: '/demo/home-batteries', branch: 'research/home-batteries',
+    role: 'agent', state, since: now, lastAction: action[state] ?? '', lastActionAt: now, promptAt: t < 3 ? 1 : 2, updatedAt: now,
+    plan, mode: 'research',
+    research: {
+      since: now - t * TICK_MS, inFlight: ownLoad(t), calls: probes.reduce((sum, p) => sum + p.calls, 0) + t * 2, probes, sources,
+      history, peak, peakAt: now - (t - peakTick) * TICK_MS,
+    },
   }
 
   return toSnapshot([agent], now, { asleepAfterMs: 1e12 })

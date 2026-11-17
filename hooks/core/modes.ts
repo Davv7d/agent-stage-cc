@@ -14,7 +14,7 @@ export type Mode = {
   /** The rules, as the agent reads them. */
   text: string
   from: 'built-in' | 'yours' | 'project'
-  /** The scene the pane is held to while the mode is on: the agent's plan unless the file says `view: team`. */
+  /** The scene the pane is held to while the mode is on: the agent's plan unless the file says `view: team` or `view: research`. */
   view: ViewMode
   /** `coordinator` when the file says `role: coordinator`: the session is drawn as one from the start. */
   role?: 'coordinator'
@@ -32,8 +32,9 @@ export const modeName = (file: string): string | undefined => /^([a-z0-9][a-z0-9
 
 /**
  * A file's text as a mode; its first heading, if any, is the title. A file
- * may open with a few settings between two lines of `---`: `view: team` and
- * `role: coordinator` are read, and none of it reaches the agent.
+ * may open with a few settings between two lines of `---`: `view: team`,
+ * `view: research` and `role: coordinator` are read, and none of it reaches
+ * the agent.
  */
 export function toMode(name: string, written: string, from: Mode['from']): Mode | undefined {
   const text = written.replace(/\r\n?/g, '\n')
@@ -53,7 +54,7 @@ export function toMode(name: string, written: string, from: Mode['from']): Mode 
     title,
     text: rules,
     from,
-    view: view === 'team' || view === 'auto' ? view : 'plan',
+    view: view === 'team' || view === 'auto' || view === 'research' ? view : 'plan',
     ...(settings.get('role') === 'coordinator' ? { role: 'coordinator' as const } : {}),
   }
 }
@@ -84,6 +85,23 @@ Keep the stages as your task list from the very first step, one task per stage. 
 4. **Check.** Verify what was built in the way the project verifies its work.
 5. **Summary.** Report what was done, what was not, and what was not checked.`
 
+const RESEARCH = `---
+view: research
+---
+# Research a topic
+
+In this session you research. The person names a topic; you find out what is known about it from sources you read, not from memory, and report it so that every claim can be followed back to where it came from.
+
+Keep the phases as your task list from the very first step, one task per phase, named as below, and each sub-question of the research plan as a task of its own. Mark a task in progress when you begin it and done when it is finished. The Agent Stage draws that list and the searches as they run, so the person sees where the research stands without asking.
+
+1. **Question.** Restate the topic in your own words: what is asked, how far it reaches, and what the answer is for. Ask where the report should go: in the chat, or in a file, for which suggest \`research/<slug>.md\`; create the file only if the person agrees. Where the depth is unclear, ask whether a quick look or a thorough study is wanted. Wait for the answers before you search, unless the person has already given them.
+2. **Research plan.** Split the topic into sub-questions that can be answered independently of one another, and add each to the task list as a task of its own. Say in a line what each one is for.
+3. **Gathering.** Answer the sub-questions in parallel: one subagent per sub-question, at most five at a time unless the person says otherwise. Describe each subagent's task by its sub-question, in a few words. Give each a brief that stands on its own: the sub-question, why it matters, what is already known, which kinds of sources to prefer, and what to bring back: the findings, the address of each source, and the date of anything that may change. Tell each to run its searches and reads in parallel wherever one does not depend on another. Mark a sub-question done when its findings are in.
+4. **Verification.** Check each key claim against at least two independent sources; a page that repeats another is not a second source. Name every contradiction, and say which side the evidence favours, if either. Date each fact that changes with time, such as a price, a version, a figure or who holds a post.
+5. **Report.** The answer first, in a few sentences. Then the findings, each with links to its sources; then what is uncertain, and what was not checked. Put the report where the person asked for it.
+
+If the person narrows or widens the topic, go back to the research plan and say what changes.`
+
 const COORDINATE = `---
 view: team
 role: coordinator
@@ -103,6 +121,7 @@ Keep a task list of what is in flight, one task per piece of work handed out, na
 export const BUILT_IN: readonly Mode[] = [
   toMode('plan', PLAN, 'built-in'),
   toMode('full', FULL, 'built-in'),
+  toMode('research', RESEARCH, 'built-in'),
   toMode('coordinate', COORDINATE, 'built-in'),
   toMode('init', INIT, 'built-in'),
 ].filter((m): m is Mode => m !== undefined)
