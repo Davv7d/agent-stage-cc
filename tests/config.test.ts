@@ -22,6 +22,7 @@ test('a person turns things off and tunes the timing', async () => {
   expect(config).toEqual({
     band: false,
     guide: true,
+    projectRules: true,
     view: 'team',
     language: 'pl',
     notify: { question: true, failed: false, released: true, pr: true },

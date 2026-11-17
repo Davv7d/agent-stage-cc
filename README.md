@@ -12,6 +12,12 @@ It is a Claude Code mod (a plugin of function hooks). It reads what agents do
 and never asks them to report anything, it enforces nothing, and it needs no
 configuration to start.
 
+It is for any kind of work, not only code. A project's rules live in plain
+files any assistant reads, an `AGENTS.md` and a `skills/` folder, so the
+people who work on it with another assistant, without the mod, follow the
+same rules. The mod makes sure every session reads them first, and helps
+write them where there are none. See [A project's rules](#a-projects-rules).
+
 ## Ways to work
 
 Start a session, say how you want to work, then say what you want done:
@@ -22,7 +28,7 @@ Start a session, say how you want to work, then say what you want done:
 | `/stage agent full` | The whole task in one run, in stages, without stopping for approval | The agent's plan, moving on its own |
 | `/stage agent research` | Researches a topic you name: the question first, then subagents in parallel, each key claim checked against two sources, and a report with links | The research: its subagents, the searches in flight, the sources found |
 | `/stage agent coordinate` | Takes your tasks in, hands them out to agents in their own worktrees, watches over them and keeps the shared resource in order | The team |
-| `/stage agent init` | Sets a project up for agents: asks what it is for, its technologies, how work is done and what agents may reach, then writes AGENTS.md, skills and settings once you accept | The agent's plan |
+| `/stage agent init` | Sets a project up for any agent: asks what it is for, then what that kind of work needs and how it is done, sums it up, and once you agree writes `AGENTS.md` and `skills/` | The agent's plan |
 
 ![One agent working through its plan, demo data](docs/plan.gif)
 
@@ -120,15 +126,27 @@ it, so one command is enough. `/stage agent` lists the modes on offer, and
   their questions and results to you. It also keeps the record of the shared
   resource: who holds it, who waits, and in what order. Who goes first stays
   yours and the project's to decide.
-- **`init`**: set the project up for agents, so that every later session, on
-  any machine and for anyone, starts ready. The agent reads what the folder
-  already holds, asks about the project, its technologies, its working rules
-  and what agents may reach, and proposes the files. Once you accept, it
-  writes them: `AGENTS.md`, a `CLAUDE.md` that imports it, project skills,
-  `.claude/settings.json`, `.mcp.json` where MCP servers are wanted, and
-  `.agent-stage-cc.json` with the project's default mode. In an existing
-  project it asks only about the gaps, and it changes no file without
-  showing you the change. Its phases are its task list, as in `plan`.
+- **`init`**: set the project up for any agent, so that everyone who works
+  in it, on any machine and with any assistant, starts ready. The agent first
+  asks what the project is for (software, writing, research, data or anything
+  else) and fits its questions to the answer. It reads what the folder already
+  holds, asks whether the project has a repository the setup belongs in (and
+  clones it where it is elsewhere), then asks what this kind of work needs and
+  how work is done here. It sums that up in a few lines with the files it
+  would write, asks whether that is everything, and waits. Once you agree it
+  writes:
+  - `AGENTS.md`, the project's rules for any agent, saying that they come
+    first and listing the skills with when to read each;
+  - `skills/`, one plain Markdown file per skill, such as
+    `testing_rules.md`, with scripts or folders a skill needs;
+  - nothing that only one assistant reads unless you ask: a `CLAUDE.md` that
+    exists gets an `@AGENTS.md` line, and settings for one assistant, or the
+    project's default mode in `.agent-stage-cc.json`, come on request.
+
+  The files go into the repository unless you say they must stay out of it,
+  and it commits and pushes only when you agree. In an existing project it
+  asks only about the gaps, and it changes no file without showing you the
+  change. Its phases are its task list, as in `plan`.
 
 `plan` and `full` tell the agent to keep the phases as its task list, so the
 pane shows them as the plan: which phase is in progress, which are done, and
@@ -195,6 +213,27 @@ once you trust the folder, and each person still installs the mod once (see
   "enabledPlugins": { "agent-stage-cc@agent-stage-cc": true }
 }
 ```
+
+### A project's rules
+
+Whatever mode is on, and with none, every session is pointed at the project's
+own rules when it starts:
+
+- **The project has an `AGENTS.md`.** The agent is told to read it before it
+  starts on a task, with the skills it points to whenever a task is one they
+  cover, and that its rules come first: where a working mode says otherwise,
+  the project's rules win. Claude Code reads AGENTS.md by itself only where
+  there is no CLAUDE.md; where a CLAUDE.md does not bring it in with an
+  `@AGENTS.md` line, the agent is told to read it.
+- **It has only a `CLAUDE.md`.** Claude Code reads that by itself, and the
+  mod adds nothing.
+- **It has neither.** The agent suggests once, before its first task, that
+  you set the project up with `/stage agent init`, and a toast says the same
+  once a session. Either of you can go on without it.
+
+The project is the repository the session starts in, or, outside one, the
+folder it starts in: its rules, its own modes and its `.agent-stage-cc.json`
+are read there too. `"projectRules": false` in your config turns this off.
 
 ### What a mode is and is not
 
@@ -333,6 +372,7 @@ Everything is optional.
 {
   "band": true,
   "guide": true,
+  "projectRules": true,
   "view": "auto",
   "language": "auto",
   "notify": { "question": true, "failed": true, "released": true, "pr": false },
@@ -367,8 +407,9 @@ outright. Replies to `/stage` commands are in English.
 In `<git common dir>/agent-stage-cc/`, which every worktree of a repository
 shares and git never commits: one file per agent in `agents/`, one per shared
 resource in `resources/`, and the latest usage measurement. Files of worktrees
-that no longer exist are removed. Outside a git repository the mod does
-nothing.
+that no longer exist are removed. Outside a git repository there is no shared
+state and the stage has nothing to draw, but the project's rules, its modes
+and its settings are read in the folder the session starts in.
 
 CPU and memory are shown twice. The whole machine is what the system itself
 counts: `/proc/stat` and `/proc/meminfo` on Linux, `ps` and `vm_stat` on

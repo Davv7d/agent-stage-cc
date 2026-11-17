@@ -79,9 +79,8 @@ test('the built-in modes: plan first, the whole task in one run, and coordinatin
   expect(plan).toContain('Then stop and wait')
   expect(plan).toContain('task list')
   expect(BUILT_IN[1]?.text).toContain('without stopping for approval')
-  // Nothing of any one project is in them: init names Docker only to ask whether agents may run it.
-  for (const mode of BUILT_IN) expect(/npm|pytest|yarn|make /i.test(mode.text)).toBe(false)
-  for (const mode of BUILT_IN.filter(m => m.name !== 'init')) expect(/docker/i.test(mode.text)).toBe(false)
+  // Nothing of any one project, or of any one kind of project, is in them.
+  for (const mode of BUILT_IN) expect(/npm|pytest|yarn|make |docker/i.test(mode.text)).toBe(false)
 })
 
 test("a project's mode wins over a person's, and a person's over a built-in one", async () => {

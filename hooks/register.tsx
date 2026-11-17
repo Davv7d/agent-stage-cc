@@ -9,6 +9,8 @@ import { DEFAULTS, GLOBAL_CONFIG, GUIDE, PROJECT_CONFIG, readConfig, readProject
 import type { Config } from './core/config'
 import { demoPlanSnapshot, demoResearchSnapshot, demoSnapshot, demoUsage } from './core/demo'
 import { describeModes, loadModes, MODE_ENDED, modeBrief, startingMode } from './core/modes'
+import { findRules, hasRules, NO_RULES_NOTICE, rulesBrief } from './core/rules'
+import type { Rules } from './core/rules'
 import type { Mode } from './core/modes'
 import { isPlanTool, isSessionList } from './core/plan'
 import { classify, DEFAULT_PATTERNS } from './core/derive'
@@ -121,6 +123,8 @@ const workMode = atom({ plugin: 'agent-stage-cc', key: 'workMode' } as const, nu
 const isWorkModeDefault = atom({ plugin: 'agent-stage-cc', key: 'isWorkModeDefault' } as const, false)
 const briefNow = atom({ plugin: 'agent-stage-cc', key: 'brief' } as const, null, { shape: 'brief-4' })
 const bandHidden = atom({ plugin: 'agent-stage-cc', key: 'bandHidden' } as const, false)
+/** The person was told the folder has no rules for agents: once a session. */
+const isRulesNoted = atom({ plugin: 'agent-stage-cc', key: 'isRulesNoted' } as const, false)
 
 /** The band's colors: one per figure, amber and red for what runs out. */
 const TONES: Record<Tone, string> = {
@@ -169,6 +173,10 @@ type Self = {
   isModeDefault: boolean
   /** The default mode the project's `.agent-stage-cc.json` names, on offer or not. */
   projectMode: string | undefined
+  /** The folder the session started in. */
+  cwd: string
+  /** The instruction files the project holds, once looked for. */
+  rules: Rules | null
   lang: Lang
   /** The language the machine itself is set to; the config may name another. */
   systemLang: Lang
@@ -393,7 +401,9 @@ async function sampleUsage(
 async function modesHere($: EngineInterface, self: Self): Promise<Mode[]> {
   if (!self.isLocated) await locateSelf($, self, await $.clock.now()).catch(() => undefined)
 
-  return loadModes($, await $.env.get('HOME'), self.who?.worktree)
+  const root = rootOf(self)
+
+  return loadModes($, await $.env.get('HOME'), root === '' ? undefined : root)
 }
 
 /**
@@ -471,12 +481,31 @@ async function startMode($: EngineInterface, self: Self, isInteractive: boolean)
  * The person's settings and the project's own patterns, read again now and
  * then so an edit takes hold without a restart. A missing file is the defaults.
  */
+/** The project's folder: the repository's top, or the folder the session started in outside one. */
+const rootOf = (self: Self) => self.who?.worktree ?? self.cwd
+
+/** Looks again for the project's instruction files: AGENTS.md, CLAUDE.md. */
+async function readRules($: EngineInterface, self: Self): Promise<void> {
+  const root = rootOf(self)
+  if (root === '') return
+  self.rules = await findRules($, self.cwd === '' ? [root] : [root, self.cwd])
+}
+
+/** Where no rules are written down, the person hears once a session that init writes them. */
+async function noteRules($: EngineInterface, self: Self, isInteractive: boolean): Promise<void> {
+  if (!self.config.projectRules || !isInteractive || self.rules === null || hasRules(self.rules)) return
+  if (self.mode?.name === 'init' || (await read($, isRulesNoted))) return
+  await update($, isRulesNoted, () => true)
+  $.ui.toast(NO_RULES_NOTICE)
+}
+
 async function loadConfig($: EngineInterface, self: Self): Promise<void> {
   const home = await $.env.get('HOME')
   const mine = home === undefined ? '' : await $.fs.read(`${home}/${GLOBAL_CONFIG}`).catch(() => '')
   self.config = mine === '' ? DEFAULTS : readConfig(mine)
   self.lang = self.config.language === 'auto' ? self.systemLang : self.config.language
-  const theirs = self.who === undefined ? '' : await $.fs.read(`${self.who.worktree}/${PROJECT_CONFIG}`).catch(() => '')
+  const root = rootOf(self)
+  const theirs = root === '' ? '' : await $.fs.read(`${root}/${PROJECT_CONFIG}`).catch(() => '')
   const project = theirs === '' ? {} : readProjectConfig(theirs)
   self.projectMode = project.mode
   self.patterns = {
@@ -665,7 +694,7 @@ export const register: Register = on => {
   const self: Self = {
     who: undefined, rec: undefined, written: '', writtenAt: 0, isLocated: false,
     researchWritten: 'null', title: undefined, isFlushDue: false, isSaving: false, isDirty: false,
-    shown: '', stage: null, polls: 0, isDemo: false, demoKind: 'team', mode: null, isModeDefault: false, projectMode: undefined, lang: 'en', systemLang: 'en', utcOffsetMinutes: 0,
+    shown: '', stage: null, polls: 0, isDemo: false, demoKind: 'team', mode: null, isModeDefault: false, projectMode: undefined, cwd: '', rules: null, lang: 'en', systemLang: 'en', utcOffsetMinutes: 0,
     pane: '', paneWritten: '', images: null, config: DEFAULTS, patterns: DEFAULT_PATTERNS, last: null, briefShown: '',
     machine: undefined, cpuSeconds: null, system: null, sampledAt: 0, containers: {}, usage: null, limits: [], sessionId: '', trouble: '',
   }
@@ -684,12 +713,15 @@ export const register: Register = on => {
     })
     await readLocale($, self)
     // Located first, so that the project's own file is read with the person's.
+    self.cwd = await $.session.cwd().catch(() => '')
     if (!self.isLocated) await $.clock.now().then(at => locateSelf($, self, at)).catch(() => undefined)
     await loadConfig($, self).catch(() => undefined)
+    await readRules($, self).catch(() => undefined)
     self.isDemo = await read($, demo)
     const sessionId = await $.session.id()
     await emit($, self, at => ({ kind: 'session-start', at, sessionId }))
     await startMode($, self, e.isInteractive)
+    await noteRules($, self, e.isInteractive).catch(() => undefined)
     // A title heard before the session's start was the session's own: the start set the record anew.
     if (self.title !== undefined) {
       const title = self.title
@@ -716,11 +748,15 @@ export const register: Register = on => {
   // How to keep the stage's record, told once in each session's instructions.
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)
+    // The project's rules come first: AGENTS.md, or a nudge to write one. Looked for anew, since init may have written them.
+    await readRules($, self).catch(() => undefined)
+    const said = self.config.projectRules && self.rules !== null ? rulesBrief(self.rules, self.mode?.name === 'init') : undefined
+    const rules = said === undefined ? [] : [{ id: 'agent-stage-cc:rules', text: said, scope: 'session' as const }]
     // A working mode's rules head every new thread while the mode is on.
     const mode = self.mode === null ? [] : [{ id: 'agent-stage-cc:mode', text: modeBrief(self.mode, self.isModeDefault), scope: 'session' as const }]
     const guide = self.config.guide ? [{ id: 'agent-stage-cc:guide', text: GUIDE, scope: 'session' as const }] : []
 
-    return { sections: [...composed.sections, ...guide, ...mode] }
+    return { sections: [...composed.sections, ...rules, ...guide, ...mode] }
   })
 
   on('session.end', async ($, e, next) => {

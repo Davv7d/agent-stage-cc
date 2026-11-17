@@ -258,10 +258,11 @@ test('each session is told how to keep the record, unless the person says no', a
 
   await $.session.start({ cwd: TOP, surface: 'desktop', isInteractive: true })
   const sections = await compose()
-  expect(sections.map(s => s.id)).toEqual(['core', 'agent-stage-cc:guide'])
-  expect(sections[1]?.scope).toBe('session')
+  // Every file is there in this machine, AGENTS.md too: the project's rules come first.
+  expect(sections.map(s => s.id)).toEqual(['core', 'agent-stage-cc:rules', 'agent-stage-cc:guide'])
+  expect(sections[2]?.scope).toBe('session')
 
-  files.set('/home/me/.config/agent-stage-cc/config.json', '{"guide":false}')
+  files.set('/home/me/.config/agent-stage-cc/config.json', '{"guide":false,"projectRules":false}')
   await $.session.start({ cwd: TOP, surface: 'desktop', isInteractive: true })
   expect((await compose()).map(s => s.id)).toEqual(['core'])
 })

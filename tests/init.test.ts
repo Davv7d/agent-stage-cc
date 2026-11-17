@@ -11,46 +11,52 @@ const builtIn = (name: string): Mode => {
   return mode
 }
 
-test('init sets a project up in phases kept as the task list, watched on its plan', async () => {
+test('init asks what the project is for, gathers, sums up and waits, then writes', async () => {
   const mode = builtIn('init')
-  expect(mode.title).toBe('Set the project up for agents')
+  expect(mode.title).toBe('Set the project up for any agent')
   expect(mode.view).toBe('plan')
   expect(mode.role).toBe(undefined)
   // Whole: nothing of it is cut to fit.
   expect(INIT.length).toBeLessThan(12_000)
   expect(mode.text).toBe(INIT.trim())
-  const phases = ['Look around', 'The project', 'Technologies', 'Working rules', 'Access and tools', 'Proposal', 'Write', 'Check']
+  const phases = ['Purpose', 'Look around', 'Where it lives', 'Requirements', 'Working rules', 'Summary', 'Write', 'Check']
   const at = phases.map(p => mode.text.indexOf(`**${p}.**`))
   expect(at.every((x, i) => x > 0 && (i === 0 || x > (at[i - 1] ?? 0)))).toBe(true)
   expect(mode.text).toContain('Keep the phases as your task list')
-  // It looks before it asks, and stops before it writes.
+  // What the project is for comes before any detailed question, and shapes them.
+  expect(mode.text).toContain('Before any detailed question, ask in a sentence or two what the project is for')
+  for (const kind of ['software', 'writing', 'research']) expect(mode.text).toContain(`For ${kind}:`)
+  // It looks before it asks, sums up and stops before it writes.
   expect(mode.text).toContain('Change nothing.')
   expect(mode.text).toContain('ask only about the gaps')
-  expect(mode.text).toContain('Then stop and wait. Write nothing in the same turn as the proposal.')
+  expect(mode.text).toContain('Ask whether that is everything')
+  expect(mode.text).toContain('Then stop and wait. Write nothing in the same turn as the summary.')
   // Where the person does not know, options and a recommendation; the person decides.
   expect(mode.text).toContain('propose two or three options')
   expect(mode.text).toContain('the person decides')
 })
 
-test('init writes each file where Claude Code reads it, and asks before it changes one', async () => {
+test('init writes plain files any assistant reads, into the repository unless the person says no', async () => {
   const text = builtIn('init').text
-  for (const part of [
-    '`AGENTS.md`', '`CLAUDE.md`', '`@AGENTS.md`', '`.claude/skills/<name>/SKILL.md`', '`name`', '`description`',
-    '`.claude/settings.json`', '`allow`', '`deny`', '`additionalDirectories`', '`.claude/settings.local.json`',
-    '`.mcp.json`', '`${VARIABLE}`', '`.agent-stage-cc.json`', '`"mode"`', '`"testCommands"`',
-    '`extraKnownMarketplaces`', '`enabledPlugins`',
-  ]) expect(text).toContain(part)
-  // A project's default mode needs the mod on each machine: the project names it, each person installs it.
-  expect(text).toContain('the Agent Stage (`agent-stage-cc`) among them')
-  expect(text).toContain('does not install them')
-  // Instructions ask and settings enforce: the person is told which is which.
-  expect(text).toContain('only asks the model')
-  expect(text).toContain('enforced by Claude Code')
+  // Plain files any agent reads: AGENTS.md first, one file per skill in skills/.
+  for (const part of ['`AGENTS.md`', '`skills/`', 'one Markdown file per skill', '`testing_rules.md`', '`zasady_testowania.md`', 'without accented letters', '`scripts/`']) {
+    expect(text).toContain(part)
+  }
+  for (const assistant of ['Claude Code', 'ChatGPT', 'Codex']) expect(text).toContain(assistant)
+  expect(text).toContain('its rules come first')
+  // Nothing for one assistant alone unless asked; a CLAUDE.md is only ever pointed at AGENTS.md.
+  expect(text).toContain('Write nothing that only one assistant understands, unless the person asks for it.')
+  expect(text).not.toContain('.claude/skills')
+  for (const part of ['`@AGENTS.md`', 'do not create one', '`.claude/settings.json`', '`.mcp.json`', '`.agent-stage-cc.json`', 'come only on request']) {
+    expect(text).toContain(part)
+  }
+  // A repository: found or cloned, the files go in it unless the person says no; committing and pushing are asked.
+  expect(text).toContain('clone it there and work in that copy')
+  expect(text).toContain('unless the person says they must stay out of it')
+  expect(text).toContain('`.git/info/exclude`')
+  expect(text).toContain('made only once the person agrees to it, and pushed only once they agree to that too')
   expect(text).toContain('Never overwrite an existing file without showing the change')
   expect(text).toContain('Put no secrets in any file')
-  // Every way of working a project may start in is offered, and the tools it may need.
-  for (const name of ['plan', 'full', 'coordinate', 'research']) expect(text).toContain(`\`${name}\``)
-  for (const tool of ['Claude in Chrome', "desktop app's built-in browser", 'MCP servers', 'Docker', 'shared resource']) expect(text).toContain(tool)
 })
 
 test("a session starts in the person's mode, in none once they ended it, or else in the project's default", async () => {
@@ -97,4 +103,9 @@ test("the agent is told when its mode is the project's default, and how it ends"
   expect(brief).not.toContain('The person turned on')
   expect(brief.endsWith(plan.text)).toBe(true)
   expect(modeBrief(plan)).toContain('The person turned on the working mode `plan` for this session.')
+})
+
+test("every mode tells the agent that the project's own rules come first", async () => {
+  for (const mode of BUILT_IN) expect(modeBrief(mode)).toContain("The project's own rules, in its AGENTS.md where it has one, come first")
+  expect(builtIn('research').text).toContain('its AGENTS.md and the skills it points to')
 })

@@ -94,7 +94,7 @@ In this session you research. The person names a topic; you find out what is kno
 
 Keep the phases as your task list from the very first step, one task per phase, named as below, and each sub-question of the research plan as a task of its own. Mark a task in progress when you begin it and done when it is finished. The Agent Stage draws that list and the searches as they run, so the person sees where the research stands without asking.
 
-1. **Question.** Restate the topic in your own words: what is asked, how far it reaches, and what the answer is for. Ask where the report should go: in the chat, or in a file, for which suggest \`research/<slug>.md\`; create the file only if the person agrees. Where the depth is unclear, ask whether a quick look or a thorough study is wanted. Wait for the answers before you search, unless the person has already given them.
+1. **Question.** Read what the project says about itself first, where it says anything: its AGENTS.md and the skills it points to. Restate the topic in your own words: what is asked, how far it reaches, and what the answer is for. Ask where the report should go: in the chat, or in a file, for which suggest \`research/<slug>.md\`; create the file only if the person agrees. Where the depth is unclear, ask whether a quick look or a thorough study is wanted. Wait for the answers before you search, unless the person has already given them.
 2. **Research plan.** Split the topic into sub-questions that can be answered independently of one another, and add each to the task list as a task of its own. Say in a line what each one is for.
 3. **Gathering.** Answer the sub-questions in parallel: one subagent per sub-question, at most five at a time unless the person says otherwise. Describe each subagent's task by its sub-question, in a few words. Give each a brief that stands on its own: the sub-question, why it matters, what is already known, which kinds of sources to prefer, and what to bring back: the findings, the address of each source, and the date of anything that may change. Tell each to run its searches and reads in parallel wherever one does not depend on another. Mark a sub-question done when its findings are in.
 4. **Verification.** Check each key claim against at least two independent sources; a page that repeats another is not a second source. Name every contradiction, and say which side the evidence favours, if either. Date each fact that changes with time, such as a price, a version, a figure or who holds a post.
@@ -161,7 +161,7 @@ export const modeBrief = (mode: Mode, isProjectDefault = false) =>
 
 ${isProjectDefault
     ? `This project starts every session in the working mode \`${mode.name}\` (its \`.agent-stage-cc.json\` says so), and this session is in it; the person can end it with \`/stage agent off\`.`
-    : `The person turned on the working mode \`${mode.name}\` for this session.`} From now on work by the rules below, until the person says otherwise. They say how to keep your task list: the Agent Stage draws it for the person as you go.
+    : `The person turned on the working mode \`${mode.name}\` for this session.`} From now on work by the rules below, until the person says otherwise. They say how to keep your task list: the Agent Stage draws it for the person as you go. The project's own rules, in its AGENTS.md where it has one, come first: where they and this mode differ, follow the project's.
 
 ${mode.text}`
 

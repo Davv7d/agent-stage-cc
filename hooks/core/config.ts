@@ -21,6 +21,8 @@ export type Config = {
   band: boolean
   /** A short section in each session's instructions on keeping the stage's record. */
   guide: boolean
+  /** Point each session to the project's AGENTS.md, or have it suggest init where a folder has no rules. */
+  projectRules: boolean
   /** Which scene the pane shows: the team, one agent's plan, or whichever fits. */
   view: ViewMode
   /** The language of the scene and the band: the system's, unless one is named. */
@@ -35,6 +37,7 @@ export type Config = {
 export const DEFAULTS: Config = {
   band: true,
   guide: true,
+  projectRules: true,
   view: 'auto',
   language: 'auto',
   notify: { question: true, failed: true, released: true, pr: false },
@@ -80,6 +83,7 @@ export function readConfig(text: string): Config {
   return {
     band: bool(raw.band, DEFAULTS.band),
     guide: bool(raw.guide, DEFAULTS.guide),
+    projectRules: bool(raw.projectRules, DEFAULTS.projectRules),
     view: viewOf(raw.view) ?? DEFAULTS.view,
     language: raw.language === 'en' || raw.language === 'pl' ? raw.language : DEFAULTS.language,
     notify: {

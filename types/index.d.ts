@@ -396,6 +396,8 @@ declare module 'claude-code' {
       workMode: string | null
       /** That mode is the project's default, on from the start, not one the person turned on. */
       isWorkModeDefault: boolean
+      /** The person was told this folder has no rules for agents. */
+      isRulesNoted: boolean
     }
   }
 }
