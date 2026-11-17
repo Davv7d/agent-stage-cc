@@ -227,6 +227,8 @@ The pane shows one of three scenes, drawn from the same parts.
   minutes, with the peak marked, and a counter says it in words:
   `in flight: 5 searches · 3 probes · 27 sources`.
 
+![One agent researching a topic: its subagents, the searches in flight and the sources found, demo data](docs/research.gif)
+
 The steps are the task list the agent already keeps: `TodoWrite`,
 `TaskCreate` and `TaskUpdate`, or the list tool of the app it runs in. The mod
 reads the calls and asks nothing more of the agent; an agent that keeps no
