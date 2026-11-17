@@ -1,6 +1,7 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { ViewMode } from '../../types'
+import { INIT } from './init'
 
 // A working mode is a way of working, written down: rules a person turns on
 // for a session with `/stage agent <name>`. The mod hands the rules to the
@@ -13,7 +14,7 @@ export type Mode = {
   /** The rules, as the agent reads them. */
   text: string
   from: 'built-in' | 'yours' | 'project'
-  /** The scene the pane is held to while the mode is on: the agent's plan unless the file says `view: team`. */
+  /** The scene the pane is held to while the mode is on: the agent's plan unless the file says `view: team` or `view: research`. */
   view: ViewMode
   /** `coordinator` when the file says `role: coordinator`: the session is drawn as one from the start. */
   role?: 'coordinator'
@@ -31,8 +32,9 @@ export const modeName = (file: string): string | undefined => /^([a-z0-9][a-z0-9
 
 /**
  * A file's text as a mode; its first heading, if any, is the title. A file
- * may open with a few settings between two lines of `---`: `view: team` and
- * `role: coordinator` are read, and none of it reaches the agent.
+ * may open with a few settings between two lines of `---`: `view: team`,
+ * `view: research` and `role: coordinator` are read, and none of it reaches
+ * the agent.
  */
 export function toMode(name: string, written: string, from: Mode['from']): Mode | undefined {
   const text = written.replace(/\r\n?/g, '\n')
@@ -52,7 +54,7 @@ export function toMode(name: string, written: string, from: Mode['from']): Mode 
     title,
     text: rules,
     from,
-    view: view === 'team' || view === 'auto' ? view : 'plan',
+    view: view === 'team' || view === 'auto' || view === 'research' ? view : 'plan',
     ...(settings.get('role') === 'coordinator' ? { role: 'coordinator' as const } : {}),
   }
 }
@@ -83,6 +85,23 @@ Keep the stages as your task list from the very first step, one task per stage. 
 4. **Check.** Verify what was built in the way the project verifies its work.
 5. **Summary.** Report what was done, what was not, and what was not checked.`
 
+const RESEARCH = `---
+view: research
+---
+# Research a topic
+
+In this session you research. The person names a topic; you find out what is known about it from sources you read, not from memory, and report it so that every claim can be followed back to where it came from.
+
+Keep the phases as your task list from the very first step, one task per phase, named as below, and each sub-question of the research plan as a task of its own. Mark a task in progress when you begin it and done when it is finished. The Agent Stage draws that list and the searches as they run, so the person sees where the research stands without asking.
+
+1. **Question.** Read what the project says about itself first, where it says anything: its AGENTS.md and the skills it points to. Restate the topic in your own words: what is asked, how far it reaches, and what the answer is for. Ask where the report should go: in the chat, or in a file, for which suggest \`research/<slug>.md\`; create the file only if the person agrees. Where the depth is unclear, ask whether a quick look or a thorough study is wanted. Ask whether the person has sources of their own to use, such as their documents, files or folders, and where they are; those are read first, and the web only adds to them. Wait for the answers before you search, unless the person has already given them.
+2. **Research plan.** Split the topic into sub-questions that can be answered independently of one another, and add each to the task list as a task of its own. Say in a line what each one is for.
+3. **Gathering.** Answer the sub-questions in parallel: one subagent per sub-question, at most five at a time unless the person says otherwise. Describe each subagent's task by its sub-question, in a few words. Give each a brief that stands on its own: the sub-question, why it matters, what is already known, which kinds of sources to prefer, and what to bring back: the findings, where each one stands (the exact address of a web page; for a document of the person's, the file and the page or section), and the date of anything that may change. Tell each to run its searches and reads in parallel wherever one does not depend on another. Mark a sub-question done when its findings are in.
+4. **Verification.** Check each key claim against at least two independent sources; a page that repeats another is not a second source. Name every contradiction, and say which side the evidence favours, if either. Date each fact that changes with time, such as a price, a version, a figure or who holds a post.
+5. **Report.** The answer first, in a few sentences. Then the findings, each with where it stands, so the person can find it themselves: the exact address of a web page, or the document, with its page or section, for a source of the person's own. Then what is uncertain, and what was not checked. Put the report where the person asked for it.
+
+If the person narrows or widens the topic, go back to the research plan and say what changes.`
+
 const COORDINATE = `---
 view: team
 role: coordinator
@@ -102,7 +121,9 @@ Keep a task list of what is in flight, one task per piece of work handed out, na
 export const BUILT_IN: readonly Mode[] = [
   toMode('plan', PLAN, 'built-in'),
   toMode('full', FULL, 'built-in'),
+  toMode('research', RESEARCH, 'built-in'),
   toMode('coordinate', COORDINATE, 'built-in'),
+  toMode('init', INIT, 'built-in'),
 ].filter((m): m is Mode => m !== undefined)
 
 async function modesIn($: EngineInterface, dir: string, from: Mode['from']): Promise<Mode[]> {
@@ -135,15 +156,47 @@ export async function loadModes($: EngineInterface, home: string | undefined, wo
 }
 
 /** What the agent is told when a mode is turned on, and at the head of each new thread. */
-export const modeBrief = (mode: Mode) =>
+export const modeBrief = (mode: Mode, isProjectDefault = false) =>
   `# Agent Stage: working mode \`${mode.name}\`
 
-The person turned on the working mode \`${mode.name}\` for this session. From now on work by the rules below, until the person says otherwise. They say how to keep your task list: the Agent Stage draws it for the person as you go.
+${isProjectDefault
+    ? `This project starts every session in the working mode \`${mode.name}\` (its \`.agent-stage-cc.json\` says so), and this session is in it; the person can end it with \`/stage agent off\`.`
+    : `The person turned on the working mode \`${mode.name}\` for this session.`} From now on work by the rules below, until the person says otherwise. They say how to keep your task list: the Agent Stage draws it for the person as you go. The project's own rules, in its AGENTS.md where it has one, come first: where they and this mode differ, follow the project's. Speak with the person in the language they write in, whatever language these rules are written in.
 
 ${mode.text}`
 
 export const MODE_ENDED = 'The person turned the Agent Stage working mode off. Its rules no longer apply; work as you otherwise would.'
 
+/**
+ * The mode a session starts with. One the person turned on in the session wins
+ * over the project's default, and one they turned off stays off until the
+ * session ends. `kept` is what the session holds: a mode's name, null once the
+ * person turned the mode off, undefined while nothing was turned on or off;
+ * `isKeptDefault`, that the kept mode was the project's default. A kept name
+ * that is no longer on offer leaves the project's default to stand.
+ */
+export function startingMode(
+  modes: readonly Mode[],
+  kept: string | null | undefined,
+  projectDefault: string | undefined,
+  isKeptDefault = false,
+): { mode: Mode; isProjectDefault: boolean } | null {
+  if (kept === null) return null
+  const chosen = modes.find(m => m.name === kept)
+  if (chosen !== undefined) return { mode: chosen, isProjectDefault: isKeptDefault }
+  const fallback = modes.find(m => m.name === projectDefault)
+
+  return fallback === undefined ? null : { mode: fallback, isProjectDefault: true }
+}
+
+/** What `/stage agent` says of the project's default mode; nothing where the project names none. */
+export const describeDefault = (modes: readonly Mode[], name: string | undefined) =>
+  name === undefined
+    ? ''
+    : modes.some(m => m.name === name)
+      ? ` The project's default: ${name}.`
+      : ` The project's default "${name}" is not a mode on offer, so it was not turned on.`
+
 /** The modes as one line for a person: each name and where it comes from. */
-export const describeModes = (modes: readonly Mode[], current: string | undefined) =>
-  `Working modes: ${modes.map(m => `${m.name} (${m.from})`).join(', ')}. ${current === undefined ? 'None is on.' : `On now: ${current}.`} Start one with /stage agent <name>, end it with /stage agent off.`
+export const describeModes = (modes: readonly Mode[], current: string | undefined, projectDefault?: string) =>
+  `Working modes: ${modes.map(m => `${m.name} (${m.from})`).join(', ')}. ${current === undefined ? 'None is on.' : `On now: ${current}.`}${describeDefault(modes, projectDefault)} Start one with /stage agent <name>, end it with /stage agent off.`

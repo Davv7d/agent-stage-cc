@@ -59,6 +59,80 @@ export type AgentRecord = {
   mode?: string
   /** The coordinator's role came from the mode alone, and leaves with it. */
   isRoleFromMode?: true
+  /** The session's research, once it starts a subagent or its pane shows the research scene. */
+  research?: Research
+  /** The session's title as the app lists the session; the stage names the agent by it. */
+  title?: string
+}
+
+/** Where one subagent of a session stands. */
+export type ProbeStatus = 'running' | 'done' | 'stopped' | 'failed'
+
+/** What a subagent was last seen doing: reading or searching, editing, or running tests. */
+export type ProbeWork = 'research' | 'coding' | 'testing'
+
+/** One subagent the session started: a probe sent out after one question. */
+export type ResearchProbe = {
+  /** The subagent's id, as `agent.spawn` answered it and its calls carry it. */
+  id: string
+  /** What it was sent to find out: the Agent call's description, or its name. */
+  label: string
+  status: ProbeStatus
+  /** It runs in the background, so the session's own turn may end before it does. */
+  isBackground?: true
+  /** Its searches and reads running now. */
+  inFlight: number
+  /** Its searches and reads in all. */
+  calls: number
+  /** What its last call did, and that call in short. */
+  doing?: ProbeWork
+  lastAction?: string
+  startedAt: number
+  /** When it last finished. */
+  endedAt?: number
+}
+
+/** One domain the research found or read, or one document of the person's it read. */
+export type ResearchSource = {
+  /** A web page's domain, or a document's file name. */
+  domain: string
+  /** How often a page of it was found or read. */
+  hits: number
+  /** A page of it was fetched, not only found among search results. */
+  isRead?: true
+  /** The exact page, the one read before any one only found; for a document, its path. */
+  url?: string
+  /** A document of the person's, read from disk, not a web page. */
+  isFile?: true
+  /** The pages of a document that were read, as the read asked for them. */
+  pages?: string[]
+}
+
+/** The most searches and reads in flight at once in the ten seconds from `at`. */
+export type ConcurrencySample = { at: number; n: number }
+
+/**
+ * A session's research as read off its calls: the subagents it sent out, the
+ * searches and reads running now, the sources they turned up, and how many
+ * ran at once. No agent reports any of it.
+ */
+export type Research = {
+  /** When the record of this research began. */
+  since: number
+  /** The main loop's own searches and reads running now. */
+  inFlight: number
+  /** Searches and reads in all, of every loop. */
+  calls: number
+  probes: ResearchProbe[]
+  /** First found first. */
+  sources: ResearchSource[]
+  /** More domains came than the list keeps. */
+  sourcesCapped?: true
+  /** The last ten minutes, oldest first. */
+  history: ConcurrencySample[]
+  /** The most searches and reads in flight at once, and when. */
+  peak: number
+  peakAt: number
 }
 
 /** A record as a view draws it: with what depends on the clock worked out. */
@@ -166,10 +240,24 @@ export type SceneAgent = {
   plan?: PlanStep[]
   /** The working mode the agent's session is in, by name. */
   mode?: string
+  /** The session's title as the app lists it, where it has one. */
+  title?: string
+  /** The subagents it has at work now, first started first. */
+  subagents?: SceneSubagent[]
 }
 
-/** Which scene the pane shows: the team, one agent's plan, or whichever fits. */
-export type ViewMode = 'auto' | 'team' | 'plan'
+/** A subagent at work, as the team's scene draws it beside the agent that started it. */
+export type SceneSubagent = {
+  id: string
+  label: string
+  doing?: ProbeWork
+  /** Its searches and reads running now. */
+  inFlight: number
+  lastAction?: string
+}
+
+/** Which scene the pane shows: the team, one agent's plan, its research, or whichever fits. */
+export type ViewMode = 'auto' | 'team' | 'plan' | 'research'
 
 /** Where one step of a plan stands: its zone, and which place in it. */
 export type StepPlace = { zone: 'todo' | 'active' | 'gate' | 'done'; index: number }
@@ -190,6 +278,44 @@ export type PlanScene = {
   isWaiting: boolean
   /** Steps with no place on show, by zone. */
   more: { todo: number; done: number }
+}
+
+/** What the research scene draws of one probe. */
+export type SceneProbe = {
+  id: string
+  label: string
+  status: ProbeStatus
+  inFlight: number
+  calls: number
+}
+
+/**
+ * One agent's research as a scene: the agent in the middle, its probes on an
+ * orbit around it, the sources they found on a shelf, and how many searches
+ * ran at once over the last minutes.
+ */
+export type ResearchScene = {
+  agent: SceneAgent
+  /** Which probe stands on each place of the orbit; null: a free place. */
+  orbit: (string | null)[]
+  probes: SceneProbe[]
+  /** Probes new since the last stage: they fly out from the agent once. */
+  fresh: string[]
+  /** The agent's own searches and reads running now. */
+  inFlight: number
+  /** Searches and reads in all, of every loop. */
+  calls: number
+  sources: ResearchSource[]
+  sourcesCapped: boolean
+  /** Domains new since the last stage. */
+  freshSources: string[]
+  /** Calls in flight at once, per ten seconds, oldest first, ending now. */
+  series: number[]
+  peak: number
+  /** Where in `series` the peak fell; -1 when it is older. */
+  peakIndex: number
+  /** Probes with no place on the orbit. */
+  more: number
 }
 
 /** Fixed places per zone, so an agent never jumps while it stays in a zone. */
@@ -229,6 +355,8 @@ export type Stage = {
   sparks: Spark[]
   /** Present when the pane shows one agent's plan instead of the team. */
   plan: PlanScene | null
+  /** Present when the pane shows one agent's research; a stage stored before it has none. */
+  research?: ResearchScene | null
   /** The usage steps on show, and when they were last let change the scene. */
   levels: UsageLevels | null
   levelsAt: number
@@ -273,6 +401,10 @@ declare module 'claude-code' {
       viewMode: ViewMode | null
       /** The working mode turned on for the session, by name. */
       workMode: string | null
+      /** That mode is the project's default, on from the start, not one the person turned on. */
+      isWorkModeDefault: boolean
+      /** The person was told this folder has no rules for agents. */
+      isRulesNoted: boolean
     }
   }
 }

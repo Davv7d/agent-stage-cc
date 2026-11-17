@@ -4,9 +4,11 @@ import type { AgentRecord, AgentState, ResourceView, Snapshot } from '../types'
 import { demoSnapshot, demoUsage } from '../hooks/core/demo'
 import { toSnapshot } from '../hooks/core/model'
 import { appleLanguage, langFrom, langOf } from '../hooks/scene/labels'
-import { fitLayout } from '../hooks/scene/layout'
+import { fitLayout, RING_OUTER } from '../hooks/scene/layout'
 import { neon } from '../hooks/scene/neon'
-import { MAX_SOURCE, renderScene, shorten } from '../hooks/scene/scene'
+import { describeScene, MAX_SOURCE, QUEUE_NAME_MAX, renderScene, SATELLITE_ANGLES, SATELLITE_RADIUS, SATELLITE_SIZE, shorten } from '../hooks/scene/scene'
+import { emptyResearch } from '../hooks/core/research'
+import type { ProbeWork, ResearchProbe } from '../types'
 import { colorOf } from '../hooks/scene/skin'
 import { advance, USAGE_REDRAW_MS, WORK_SLOTS } from '../hooks/scene/stage'
 
@@ -268,4 +270,95 @@ test('a stage stored by an earlier version still draws', async () => {
   const stage = advance(null, shot(agent('a', 'coding')))
   const { levels: _later, levelsAt: _when, ...older } = stage
   expect(draw(older as typeof stage)).toContain('>a<')
+})
+
+const probe = (id: string, doing?: ProbeWork, more: Partial<ResearchProbe> = {}): ResearchProbe => ({
+  id, label: `Errand ${id}`, status: 'running', inFlight: doing === 'research' ? 2 : 0, calls: 1, startedAt: 0,
+  ...(doing === undefined ? {} : { doing, lastAction: { coding: 'Edit schema.ts', testing: '$ npm test', research: 'Grep x' }[doing] }), ...more,
+})
+const withProbes = (...probes: ResearchProbe[]) => ({ research: { ...emptyResearch(0), probes } })
+
+test('an agent goes by its session title, its beginning kept, and the card names the worktree', async () => {
+  const titled = agent('billing-export-1b80ab', 'coding', { title: 'Billing: CSV export for accountants and the tax office' })
+  const bare = agent('a-worktree-folder-with-a-long-name-e3eadc', 'coding')
+  const stage = advance(null, shot(titled, bare))
+  const svg = draw(stage, 60)
+  // Cut at the end, never in the middle: the beginning tells one agent from another.
+  expect(svg).toMatch(/>Billing: CSV export[^<]*…</)
+  expect(svg).toMatch(/>a-worktree-folder[^<]*…</)
+  expect(svg).not.toContain('…1b80ab')
+  // The hover card heads with the title and names the worktree under it.
+  expect(svg).toContain('worktree: billing-export-1b80ab')
+  expect(svg).not.toContain('worktree: a-worktree')
+  expect(describeScene(stage, 'en')).toContain('Billing: CSV export for accountants and the tax office: coding')
+})
+
+test('subagents at work stand around the agent that started them, and its card says what they do', async () => {
+  const busy = agent('busy', 'coding', withProbes(
+    probe('s1'), probe('s2', 'coding'), probe('s3', 'testing'), probe('s4', 'research'), probe('s5', 'coding'), probe('s6', 'research'),
+    probe('old', 'coding', { status: 'done', endedAt: 1 }),
+  ))
+  const calm = agent('calm', 'coding')
+  const stage = advance(null, shot(busy, calm))
+  const svg = draw(stage)
+  // Four are drawn, two counted; the finished one is not there at all.
+  expect(svg.match(/stroke-dasharray="1\.5 3\.5"/g)?.length).toBe(1)
+  expect(svg).toContain('>+2</text>')
+  expect(stage.agents.find(a => a.id === 'busy')?.subagents?.map(s => s.id)).toEqual(['s1', 's2', 's3', 's4', 's5', 's6'])
+  expect(svg).toContain('6 subagents at work')
+  expect(svg).toContain('◦ Errand s2 · Edit schema.ts')
+  expect(svg).toContain('◦ Errand s1 · starting')
+  expect(svg).toContain('◦ Errand s3 · $ npm test')
+  expect(svg).toContain('+3 more')
+  expect(describeScene(stage, 'pl')).toContain('6 subagentów pracuje')
+  // A full stage of agents, each with many subagents, still fits.
+  const crowd = Array.from({ length: WORK_SLOTS }, (_, i) => agent(`agent-${i}`, 'coding', withProbes(...Array.from({ length: 24 }, (_, k) => probe(`p${k}`, 'research')))))
+  for (const columns of [60, 140]) expect(draw(advance(null, shot(...crowd)), columns).length).toBeLessThan(MAX_SOURCE)
+})
+
+test('in a docked pane the names in the PR row leave room for each other', async () => {
+  const long = Array.from({ length: 5 }, (_, i) => agent(`pr-${i}`, 'pr', { title: `A rather long session title number ${i}`, pr: { url: `https://x.example/pull/${i}` } }))
+  const svg = draw(advance(null, shot(...long)), 54)
+  const { layout } = fitFor(54)
+  const names = [...svg.matchAll(/class="t nm" text-anchor="middle" fill="[^"]+">([^<]*)</g)].map(m => m[1] ?? '')
+  expect(names.length).toBe(5)
+  // About 6.3 units a character: each name fits between its neighbours, and inside the pane.
+  for (const name of names) expect(name.length).toBeLessThanOrEqual(layout.prNameMax)
+  const gap = (layout.pr(1)[0] - layout.pr(0)[0])
+  expect(layout.prNameMax * 6.3).toBeLessThan(gap)
+  expect(layout.pr(0)[0] - (layout.prNameMax * 6.3) / 2).toBeGreaterThan(0)
+})
+
+test('subagents stand clear of the caption above the first row and of the name below', async () => {
+  const ys = SATELLITE_ANGLES.map(deg => Math.sin((deg * Math.PI) / 180) * SATELLITE_RADIUS)
+  const top = Math.min(...ys) - SATELLITE_SIZE
+  const bottom = Math.max(...ys) + SATELLITE_SIZE
+  // A name's baseline is 31 under the ball's center; its letters reach about 8 above that.
+  expect(bottom).toBeLessThan(31 - 8)
+  for (const [columns, rows] of [[140, 40], [91, 46], [54, 46], [200, 60]] as const) {
+    const { layout } = fitLayout(columns, rows, false)
+    // The caption's baseline is its lowest point.
+    expect(layout.work(0)[1] + top).toBeGreaterThan(layout.captions.work[1] + 4)
+  }
+})
+
+test('a name in the queue stops short of the ring it waits for', async () => {
+  // The first in line stands left of the ring, level with its center: its name reaches right toward the ring.
+  const { layout } = fitLayout(140, 40, true)
+  const ring = layout.ring
+  if (ring === undefined) throw new Error('no ring')
+  const first = ring.queue(0)
+  const halfName = (QUEUE_NAME_MAX * 6.3) / 2
+  expect(first[0] + halfName).toBeLessThan(ring.center[0] - RING_OUTER - 4)
+})
+
+test('the team is drawn anew when a subagent starts or stops, or a title arrives, though nothing else changed', async () => {
+  const first = advance(null, shot(agent('a', 'research')))
+  const sent = advance(first, shot(agent('a', 'research', withProbes(probe('s1', 'research'), probe('s2', 'coding')))))
+  expect(sent).not.toBe(first)
+  expect(sent.agents[0]?.subagents?.length).toBe(2)
+  const back = advance(sent, shot(agent('a', 'research', withProbes(probe('s1', 'research', { status: 'done', endedAt: 1 }), probe('s2', 'coding')))))
+  expect(back.agents[0]?.subagents?.map(s => s.id)).toEqual(['s2'])
+  const titled = advance(back, shot(agent('a', 'research', { title: 'Billing: CSV export', ...withProbes(probe('s2', 'coding')) })))
+  expect(titled.agents[0]?.title).toBe('Billing: CSV export')
 })

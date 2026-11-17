@@ -258,10 +258,11 @@ test('each session is told how to keep the record, unless the person says no', a
 
   await $.session.start({ cwd: TOP, surface: 'desktop', isInteractive: true })
   const sections = await compose()
-  expect(sections.map(s => s.id)).toEqual(['core', 'agent-stage-cc:guide'])
-  expect(sections[1]?.scope).toBe('session')
+  // Every file is there in this machine, AGENTS.md too: the project's rules come first.
+  expect(sections.map(s => s.id)).toEqual(['core', 'agent-stage-cc:rules', 'agent-stage-cc:guide'])
+  expect(sections[2]?.scope).toBe('session')
 
-  files.set('/home/me/.config/agent-stage-cc/config.json', '{"guide":false}')
+  files.set('/home/me/.config/agent-stage-cc/config.json', '{"guide":false,"projectRules":false}')
   await $.session.start({ cwd: TOP, surface: 'desktop', isInteractive: true })
   expect((await compose()).map(s => s.id)).toEqual(['core'])
 })
@@ -349,7 +350,7 @@ test('a working mode is turned on by name and its rules reach the agent', async 
 
   await $.session.start({ cwd: TOP, surface: 'desktop', isInteractive: true })
   expect((await run('agent')).text).toBe(
-    'Working modes: audit (yours), coordinate (built-in), full (project), plan (built-in). None is on. Start one with /stage agent <name>, end it with /stage agent off.',
+    'Working modes: audit (yours), coordinate (built-in), full (project), init (built-in), plan (built-in), research (built-in). None is on. Start one with /stage agent <name>, end it with /stage agent off.',
   )
   expect((await sections()).some(s => s.id === 'agent-stage-cc:mode')).toBe(false)
 
@@ -449,4 +450,80 @@ test("a mode's name shows on the scene beside the agent it guides", async ($, on
   expect(source).toContain('step 1 / 3 · Context')
   expect(source).toContain('>mode: plan<')
   await ui.unmount()
+})
+
+test("a project's default mode is on from the start, until the person picks another or ends it", async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  mock.env(on, { HOME: '/home/me' })
+  const { files } = machine(on, TOP)
+  on('tool.call', () => ({ result: {} }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined }
+  })
+  on('prompt.compose', () => ({ sections: [{ id: 'core', text: 'You are Claude.', scope: 'shared' as const }] }))
+  files.set(`${TOP}/.agent-stage-cc.json`, JSON.stringify({ mode: 'plan' }))
+  const run = (args: string) => $.command.run({ command: 'stage', args } as never)
+  const rules = async () =>
+    (await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] } as never))
+      .sections.find(s => s.id === 'agent-stage-cc:mode')?.text
+  const mode = () => JSON.parse(files.get(FILE) ?? '{}').mode
+  const start = () => $.session.start({ cwd: TOP, surface: 'desktop', isInteractive: true })
+  // What the session keeps of its mode, as it writes it.
+  const written = new Map<string, unknown>()
+  on('state.set', { plugin: 'agent-stage-cc' }, (_, e, next) => {
+    written.set(e.key, e.value)
+
+    return next(e)
+  })
+  const kept = async () => [written.get('workMode'), written.get('isWorkModeDefault')]
+
+  // On with no command: the agent reads the rules from its first thread, the stage records it.
+  await start()
+  expect(await rules()).toContain('This project starts every session in the working mode `plan`')
+  expect(await rules()).toContain('**Proposal.**')
+  expect(mode()).toBe('plan')
+  // The session's own value names it as any mode, and says where it came from.
+  expect(await kept()).toEqual(['plan', true])
+  expect(toasts).toEqual(['Working mode "plan" is on: the project\'s default. /stage agent off ends it.'])
+  expect((await run('agent')).text).toContain("On now: plan. The project's default: plan.")
+  // A reload of the mod finds it on, and says nothing twice.
+  await start()
+  expect(toasts.length).toBe(1)
+  expect(mode()).toBe('plan')
+
+  // The person's pick wins, and holds over a reload.
+  await run('agent full')
+  expect(await rules()).toContain('The person turned on the working mode `full`')
+  expect(await kept()).toEqual(['full', false])
+  await start()
+  expect(mode()).toBe('full')
+  expect(await rules()).toContain('The person turned on the working mode `full`')
+
+  // Off is off for the rest of the session, a reload included.
+  const off = await run('agent off')
+  expect(off.text).toBe('Working mode "full" is off. The project\'s default, plan, stays off until this session ends.')
+  await start()
+  expect(await rules()).toBe(undefined)
+  expect(mode()).toBe(undefined)
+  expect(await kept()).toEqual([null, false])
+  expect((await run('agent')).text).toContain("None is on. The project's default: plan.")
+  expect(toasts.length).toBe(1)
+})
+
+test("a project's default that names no mode turns nothing on, and /stage agent says why", async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  mock.env(on, { HOME: '/home/me' })
+  const { files } = machine(on, TOP)
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  files.set(`${TOP}/.agent-stage-cc.json`, JSON.stringify({ mode: 'sprint' }))
+
+  await $.session.start({ cwd: TOP, surface: 'desktop', isInteractive: true })
+  expect(JSON.parse(files.get(FILE) ?? '{}').mode).toBe(undefined)
+  expect((await $.command.run({ command: 'stage', args: 'agent' } as never)).text).toContain(
+    'None is on. The project\'s default "sprint" is not a mode on offer, so it was not turned on.',
+  )
 })

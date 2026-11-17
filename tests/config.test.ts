@@ -22,6 +22,7 @@ test('a person turns things off and tunes the timing', async () => {
   expect(config).toEqual({
     band: false,
     guide: true,
+    projectRules: true,
     view: 'team',
     language: 'pl',
     notify: { question: true, failed: false, released: true, pr: true },
@@ -68,4 +69,18 @@ test('the view is one of three by name, and auto unless said', async () => {
   expect(readConfig('{}').language).toBe('auto')
   expect(readConfig('{"language":"en"}').language).toBe('en')
   expect(readConfig('{"language":"de"}').language).toBe('auto')
+})
+
+test('a project names the mode its sessions start with', async () => {
+  expect(readProjectConfig('{"mode":"plan"}').mode).toBe('plan')
+  // Written loosely, it is still the name.
+  expect(readProjectConfig('{"mode":"  Plan "}').mode).toBe('plan')
+  // Anything but a name is no default; a name that is no mode is kept, for /stage agent to point out.
+  for (const raw of ['{"mode":""}', '{"mode":7}', '{"mode":null}', '{"mode":["plan"]}', '{}', 'nope']) {
+    expect(readProjectConfig(raw).mode).toBe(undefined)
+  }
+  expect(readProjectConfig('{"mode":"sprint"}').mode).toBe('sprint')
+  // In one file with the patterns, each read on its own.
+  const both = readProjectConfig(JSON.stringify({ mode: 'full', testCommands: ['\\bcheck\\b'] }))
+  expect([both.mode, both.test?.length, both.coordinate]).toEqual(['full', 1, undefined])
 })

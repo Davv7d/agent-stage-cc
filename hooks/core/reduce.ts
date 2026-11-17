@@ -1,14 +1,37 @@
-import type { AgentRecord, AgentState } from '../../types'
+import type { AgentRecord, AgentState, Research } from '../../types'
 import { endsWithQuestion, findPrUrl } from './derive'
-import type { Action } from './derive'
+import type { Action, ActionKind } from './derive'
 import { isFinished, planAfter } from './plan'
+import {
+  callEnded,
+  callStarted,
+  emptyResearch,
+  isRunning,
+  probeActed,
+  probeEnded,
+  probeStarted,
+  sessionEnded,
+  turnEnded,
+} from './research'
+import type { Found } from './research'
+
+/** Where a call ran: a subagent's loop by its id (absent: the session's own), and whether it searches or reads. */
+type Loop = { loop?: string; isSearch?: boolean }
 
 export type StageEvent =
   | { kind: 'session-start'; at: number; sessionId: string }
   | { kind: 'session-end'; at: number }
   | { kind: 'turn-start'; at: number }
-  | { kind: 'tool-start'; at: number; action: Action }
-  | { kind: 'tool-end'; at: number; action: Action; isError: boolean; output?: string }
+  | ({ kind: 'tool-start'; at: number; action: Action } & Loop)
+  | ({ kind: 'tool-end'; at: number; action: Action; isError: boolean; output?: string; found?: Found[] } & Loop)
+  /** A subagent began: at its spawn, with what it was sent for, or at a later turn of its own. */
+  | { kind: 'probe-start'; at: number; id: string; label?: string; isBackground?: boolean }
+  /** A subagent's own turn ended. */
+  | { kind: 'probe-end'; at: number; id: string; reason: 'answer' | 'aborted' | 'refusal' | 'error' }
+  /** The session's pane shows its research: keep it from now on. */
+  | { kind: 'research-watch'; at: number }
+  /** The session's title, as the app lists the session. */
+  | { kind: 'title'; at: number; title: string }
   /** A call of a tool that keeps the agent's task list, once it succeeded. */
   | { kind: 'plan-call'; at: number; tool: string; input: Readonly<Record<string, unknown>>; result?: unknown }
   /** The person turned a working mode on, or off with null. */
@@ -105,17 +128,54 @@ export function apply(rec: AgentRecord, event: StageEvent): AgentRecord {
   return { ...next, updatedAt: event.at }
 }
 
+/** States an agent rests in between its own turns. */
+const RESTING = new Set<AgentState>(['idle', 'question', 'pr', 'done', 'failed'])
+/** What a subagent's call does to the agent it works for even while that agent rests. */
+const MOVES_AT_REST = new Set<ActionKind>(['pr-create', 'pr-merge', 'coordinate'])
+
+/**
+ * Whether a call moves the agent's own state. Its own calls always do. A
+ * subagent's do while the agent's own turn runs; once the agent rests, a
+ * subagent working on in the background is drawn beside it and leaves its
+ * state alone, unless it opens or merges a pull request or hands work out.
+ */
+const movesAgent = (rec: AgentRecord, loop: string | undefined, kind: ActionKind) =>
+  loop === undefined || !RESTING.has(rec.state) || MOVES_AT_REST.has(kind)
+
+/** A title longer than this is cut: the stage shows its beginning only. */
+const MAX_TITLE = 120
+
+/** A record with its research changed, where it keeps any. */
+const researched = (rec: AgentRecord, change: (r: Research) => Research): AgentRecord =>
+  rec.research === undefined ? rec : { ...rec, research: change(rec.research) }
+
 function step(rec: AgentRecord, event: StageEvent): AgentRecord {
   switch (event.kind) {
     case 'session-start': {
       if (event.sessionId === rec.sessionId) return { ...rec, isLive: true }
-      // Another session in the same worktree: the plan and the mode were the last one's.
-      const { plan: _plan, ...fresh } = withoutMode(rec)
+      // Another session in the same worktree: the plan, the mode, the research and the title were the last one's.
+      const { plan: _plan, research: _research, title: _title, ...fresh } = withoutMode(rec)
 
       return { ...fresh, sessionId: event.sessionId, isLive: true }
     }
     case 'session-end':
-      return { ...rec, isLive: false }
+      return researched({ ...rec, isLive: false }, r => sessionEnded(r, event.at))
+    case 'probe-start': {
+      // A spawn starts the record of research; a later turn only carries one on.
+      const r = rec.research ?? (event.label === undefined ? undefined : emptyResearch(event.at))
+
+      return r === undefined ? rec : { ...rec, research: probeStarted(r, event.at, event.id, event.label, event.isBackground) }
+    }
+    case 'probe-end':
+      return researched(rec, r => probeEnded(r, event.at, event.id, event.reason))
+    case 'title': {
+      const title = event.title.replace(/\s+/g, ' ').trim().slice(0, MAX_TITLE)
+      const { title: _was, ...untitled } = rec
+
+      return title === '' ? untitled : { ...rec, title }
+    }
+    case 'research-watch':
+      return rec.research === undefined ? { ...rec, research: emptyResearch(event.at) } : rec
     case 'mode': {
       const rest = withoutMode(rec)
       if (event.name === null) return rest
@@ -130,19 +190,37 @@ function step(rec: AgentRecord, event: StageEvent): AgentRecord {
       return plan.length === 0 ? rest : { ...rest, plan }
     }
     case 'turn-start': {
-      // A new order after a finished plan starts from an empty one.
+      // A new order after a finished plan starts from an empty one. Its
+      // research starts anew too, as does that of a session that keeps no
+      // plan, unless some of it still runs: what is drawn is this order's.
       const { before: _answered, plan, ...fresh } = { ...rec, promptAt: event.at }
-      const prompted = plan === undefined || isFinished(plan) ? fresh : { ...fresh, plan }
+      const isNewOrder = plan === undefined || isFinished(plan)
+      const prompted = isNewOrder ? fresh : { ...fresh, plan }
+      const anew = isNewOrder && prompted.research !== undefined && !isRunning(prompted.research)
+        ? { ...prompted, research: emptyResearch(event.at) }
+        : prompted
       const wakes = rec.state === 'idle' || rec.state === 'question' || rec.state === 'failed' || rec.state === 'done'
 
-      return wakes ? enter(prompted, 'research', event.at) : prompted
+      return wakes ? enter(anew, 'research', event.at) : anew
     }
-    case 'tool-start':
-      return onToolStart(rec, event.at, event.action)
-    case 'tool-end':
-      return onToolEnd(rec, event.at, event.action, event.isError, event.output ?? '')
+    case 'tool-start': {
+      const loop = event.loop
+      const moved = movesAgent(rec, loop, event.action.kind) ? onToolStart(rec, event.at, event.action) : rec
+      // A subagent's call is its own last action, drawn beside it; the agent keeps its own.
+      const acted = loop === undefined ? moved : { ...moved, lastAction: rec.lastAction }
+
+      // A probe's call says what the probe does now.
+      const seen = loop === undefined ? acted : researched(acted, r => probeActed(r, loop, event.action))
+
+      return event.isSearch === true ? researched(seen, r => callStarted(r, event.at, loop)) : seen
+    }
+    case 'tool-end': {
+      const ended = movesAgent(rec, event.loop, event.action.kind) ? onToolEnd(rec, event.at, event.action, event.isError, event.output ?? '') : rec
+
+      return event.isSearch === true ? researched(ended, r => callEnded(r, event.at, event.loop, event.found)) : ended
+    }
     case 'turn-end':
-      return onTurnEnd(rec, event.at, event.answer, event.reason)
+      return researched(onTurnEnd(rec, event.at, event.answer, event.reason), r => turnEnded(r, event.at, event.reason))
     case 'pr-state': {
       if (event.state === 'open') {
         return event.url === undefined || rec.pr === undefined ? rec : { ...rec, pr: { url: event.url } }

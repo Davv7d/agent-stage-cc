@@ -1,4 +1,4 @@
-import type { AgentState } from '../../types'
+import type { AgentState, SceneSubagent } from '../../types'
 import { glance, progressOf } from '../core/plan'
 import { usageText } from '../core/usage'
 import { WORDS } from './labels'
@@ -32,6 +32,12 @@ export const esc = (text: string) =>
   text.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '')
 
 export const n1 = (value: number) => (Math.round(value * 10) / 10).toString()
+
+/** Text cut at its end: the beginning is what tells one name from another. */
+export const cut = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`)
+
+/** What an agent is called on the stage: its session's title, else its worktree's name. */
+export const nameOf = (a: { id: string; title?: string }, max: number) => cut(a.title ?? a.id, max)
 
 export const shorten = (name: string, max: number) =>
   name.length <= max ? name : `${name.slice(0, Math.ceil((max - 1) / 2))}…${name.slice(-Math.floor((max - 1) / 2))}`
@@ -158,19 +164,99 @@ function planRows(a: SceneAgent, o: SceneOptions): string[] {
   const { done, total, near } = glance(plan)
   const mark = { done: '✓', active: '▸', pending: '·' } as const
 
-  return [WORDS[o.lang].stepsDone(done, total), ...near.map(s => `${mark[s.status]} ${shorten(s.text, 34)}`)]
+  return [WORDS[o.lang].stepsDone(done, total), ...near.map(s => `${mark[s.status]} ${cut(s.text, 34)}`)]
+}
+
+/** The subagents at work in a hover card: how many, and what the first few do. */
+function subagentRows(a: SceneAgent, o: SceneOptions): string[] {
+  const subs = a.subagents ?? []
+  if (subs.length === 0) return []
+  const w = WORDS[o.lang]
+  const shown = subs.slice(0, CARD_SUBAGENTS).map(s => `◦ ${cut(s.label || w.research.unnamed, 18)} · ${cut(s.lastAction ?? w.doing[s.doing ?? 'starting'], 22)}`)
+
+  return [w.subagents(subs.length), ...shown, ...(subs.length > CARD_SUBAGENTS ? [w.more(subs.length - CARD_SUBAGENTS)] : [])]
+}
+
+/**
+ * Characters of a name that fit where the agent stands. The queue curls
+ * round the ring, so a name there must stop short of the ring's edge.
+ */
+export const QUEUE_NAME_MAX = 18
+const nameRoom = (place: Place, layout: Layout) =>
+  place.zone === 'pr' ? layout.prNameMax : place.zone === 'queue' ? Math.min(layout.nameMax, QUEUE_NAME_MAX) : layout.nameMax
+
+/** Subagents a card names; the rest it counts. */
+const CARD_SUBAGENTS = 3
+/**
+ * Where around an agent its subagents stand, in degrees: on its upper left,
+ * clear of the zone's caption above it, its name below and its plan's count
+ * on its right.
+ */
+export const SATELLITE_ANGLES = [-125, -155, -185, -215]
+/** How far from an agent's center its subagents stand, and how large each is. */
+export const SATELLITE_RADIUS = 29
+export const SATELLITE_SIZE = 5
+
+/**
+ * The subagents an agent has at work, as small satellites on an arc around
+ * it: hollow while one reads, with a spark for each search in flight; solid
+ * and pulsing while it edits; light while it runs tests. Four are drawn and
+ * the rest counted.
+ */
+export function satellites(subs: readonly SceneSubagent[], color: string, radius: number): string {
+  if (subs.length === 0) return ''
+  const shown = subs.slice(0, SATELLITE_ANGLES.length)
+  const point = (deg: number, r: number): [number, number] => [Math.cos((deg * Math.PI) / 180) * r, Math.sin((deg * Math.PI) / 180) * r]
+  const [fx, fy] = point(-107, radius)
+  const [tx, ty] = point(-229, radius)
+  let g = `<path d="M${n1(fx)} ${n1(fy)}A${radius} ${radius} 0 0 0 ${n1(tx)} ${n1(ty)}" fill="none" stroke="${color}" stroke-opacity=".3" stroke-dasharray="1.5 3.5"/>`
+  shown.forEach((s, i) => {
+    const deg = SATELLITE_ANGLES[i] ?? -90
+    const [x, y] = point(deg, radius)
+    const begin = n1(i * 0.37)
+    let body: string
+    switch (s.doing) {
+      case 'coding':
+        body = `<circle r="${SATELLITE_SIZE}" fill="${color}"><animate attributeName="opacity" values=".55;1;.55" dur="1.2s" begin="${begin}s" repeatCount="indefinite"/></circle>`
+        break
+      case 'testing':
+        body = `<circle r="${SATELLITE_SIZE}" fill="#e7ebf2" stroke="${color}" stroke-width="1.2"><animate attributeName="r" values="4.4;5.4;4.4" dur=".8s" begin="${begin}s" repeatCount="indefinite"/></circle>`
+        break
+      case 'research': {
+        const [dx, dy] = point(deg, 1)
+        const sparks = Array.from({ length: Math.min(s.inFlight, 3) }, (_, k) => {
+          const at = `${n1(i * 0.37 + k * 0.3)}s`
+
+          return `<circle r="1.7" fill="${color}"><animate attributeName="cx" values="${n1(dx * 6)};${n1(dx * 13)}" dur=".9s" begin="${at}" repeatCount="indefinite"/><animate attributeName="cy" values="${n1(dy * 6)};${n1(dy * 13)}" dur=".9s" begin="${at}" repeatCount="indefinite"/><animate attributeName="opacity" values="1;0" dur=".9s" begin="${at}" repeatCount="indefinite"/></circle>`
+        }).join('')
+        body = `${sparks}<circle r="${SATELLITE_SIZE}" fill="#0f1420" stroke="${color}" stroke-width="1.4"/><circle r="1.4" fill="${color}"/>`
+        break
+      }
+      default:
+        body = `<circle r="${SATELLITE_SIZE}" fill="#0f1420" stroke="${color}" stroke-width="1.2" stroke-opacity=".5" stroke-dasharray="2 2"/>`
+    }
+    g += `<g transform="translate(${n1(x)},${n1(y)})">${body}</g>`
+  })
+  if (subs.length > shown.length) {
+    const [x, y] = point(SATELLITE_ANGLES[SATELLITE_ANGLES.length - 1] ?? -198, radius)
+    g += `<text x="${n1(x - 7)}" y="${n1(y + 3)}" class="t st" text-anchor="end" style="fill:${color}">+${subs.length - shown.length}</text>`
+  }
+
+  return g
 }
 
 export function card(a: SceneAgent, at: Point, layout: { width: number }, o: SceneOptions, cores: number): string {
   const w = WORDS[o.lang]
   const rows = [
     `${w.state[a.state]}${a.isAsleep ? ` · ${w.asleep}` : ''} · ${w.since} ${clock(a.since, o.utcOffsetMinutes)}`,
+    ...(a.title === undefined ? [] : [`${w.worktree}: ${shorten(a.id, 30)}`]),
     ...(a.mode === undefined ? [] : [`${w.mode}: ${shorten(a.mode, 30)}`]),
     ...(a.branch === null ? [] : [`${w.branch}: ${shorten(a.branch, 30)}`]),
-    ...(a.lastAction === '' ? [] : [`${w.last}: ${shorten(a.lastAction, 30)}`]),
+    ...(a.lastAction === '' ? [] : [`${w.last}: ${cut(a.lastAction, 30)}`]),
     ...(a.prUrl === undefined ? [] : [shorten(a.prUrl.replace(/^https?:\/\//, ''), 36)]),
     ...(a.usage === undefined ? [] : [`CPU ${usageText(a.usage, cores).replace(' · ', ' · RAM ')}`]),
     ...planRows(a, o),
+    ...subagentRows(a, o),
   ]
   const width = 252
   const height = 30 + rows.length * 14
@@ -181,7 +267,7 @@ export function card(a: SceneAgent, at: Point, layout: { width: number }, o: Sce
     .map((row, i) => `<text x="${n1(x + 10)}" y="${n1(y + 36 + i * 14)}" class="t st">${esc(row)}</text>`)
     .join('')
 
-  return `<g class="tip"><rect x="${n1(x)}" y="${n1(y)}" width="${width}" height="${height}" rx="7" fill="#161d2c" stroke="${colorOf(a.id)}" stroke-opacity=".7"/><text x="${n1(x + 10)}" y="${n1(y + 19)}" class="t nm" fill="${colorOf(a.id)}">${esc(shorten(a.id, 34))}</text>${lines}</g>`
+  return `<g class="tip"><rect x="${n1(x)}" y="${n1(y)}" width="${width}" height="${height}" rx="7" fill="#161d2c" stroke="${colorOf(a.id)}" stroke-opacity=".7"/><text x="${n1(x + 10)}" y="${n1(y + 19)}" class="t nm" fill="${colorOf(a.id)}">${esc(nameOf(a, 34))}</text>${lines}</g>`
 }
 
 function coordinatorBall(stage: Stage, layout: Layout, o: SceneOptions, questions: number): string {
@@ -196,7 +282,7 @@ function coordinatorBall(stage: Stage, layout: Layout, o: SceneOptions, question
     ? `<circle cx="24" cy="-24" r="11" fill="${ASK}"/><text x="24" y="-19.5" class="t" font-size="12" font-weight="700" text-anchor="middle" fill="#1a0610">${questions}</text>`
     : ''
 
-  return `<g transform="translate(${x},${y})"><circle r="46" fill="#e7ebf2" opacity=".12" filter="url(#blur)"/>${pulse}<g><circle r="36" fill="none" stroke="#5b6780" stroke-width="1.5" stroke-dasharray="3 7"/><animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="30s" repeatCount="indefinite"/></g><circle r="28" fill="#0f1420" stroke="${ring}" stroke-width="2"/><circle r="9" fill="#e7ebf2"/>${badge}<text y="58" class="t nm" text-anchor="middle" fill="#e7ebf2">${esc(shorten(stage.coordinator.id, layout.nameMax))}</text><text y="71" class="t st" text-anchor="middle"${questions > 0 ? ` style="fill:${ASK}"` : ''}>${esc(questions > 0 ? w.waiting(questions) : w.allGood)}</text></g>`
+  return `<g transform="translate(${x},${y})"><circle r="46" fill="#e7ebf2" opacity=".12" filter="url(#blur)"/>${pulse}<g><circle r="36" fill="none" stroke="#5b6780" stroke-width="1.5" stroke-dasharray="3 7"/><animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="30s" repeatCount="indefinite"/></g><circle r="28" fill="#0f1420" stroke="${ring}" stroke-width="2"/><circle r="9" fill="#e7ebf2"/>${badge}${satellites(stage.coordinator.subagents ?? [], '#e7ebf2', 44)}<text y="58" class="t nm" text-anchor="middle" fill="#e7ebf2">${esc(nameOf(stage.coordinator, layout.nameMax))}</text><text y="71" class="t st" text-anchor="middle"${questions > 0 ? ` style="fill:${ASK}"` : ''}>${esc(questions > 0 ? w.waiting(questions) : w.allGood)}</text></g>`
 }
 
 /** The document every scene is drawn in: its type, its backdrop, the skin's own parts. */
@@ -252,7 +338,7 @@ export function renderScene(stage: Stage, layout: Layout, skin: Skin, o: SceneOp
     // How far the agent's plan is, at the ball's shoulder.
     const steps = a.plan === undefined ? undefined : progressOf(a.plan)
     const progress = steps === undefined ? '' : `<text x="19" y="-17" class="t st" style="fill:${color}">${steps.done}/${steps.total}</text>`
-    balls += `<g transform="translate(${at[0]},${at[1]})"${isDim ? ` opacity="${a.isAsleep ? 0.35 : 0.2}"` : ''}>${travel}${fade}${cost}${progress}<g transform="scale(${layout.scale})">${skin.glyph(a, { color, ...(place.zone === 'queue' ? { queueIndex: place.index } : {}) })}</g><text y="${31 + drop}" class="t nm" text-anchor="middle" fill="${color}">${esc(shorten(a.id, layout.nameMax))}</text>${label}</g>`
+    balls += `<g transform="translate(${at[0]},${at[1]})"${isDim ? ` opacity="${a.isAsleep ? 0.35 : 0.2}"` : ''}>${travel}${fade}${cost}${progress}<g transform="scale(${layout.scale})">${skin.glyph(a, { color, ...(place.zone === 'queue' ? { queueIndex: place.index } : {}) })}</g>${satellites(a.subagents ?? [], color, SATELLITE_RADIUS)}<text y="${31 + drop}" class="t nm" text-anchor="middle" fill="${color}">${esc(nameOf(a, nameRoom(place, layout)))}</text>${label}</g>`
     tips += `<g class="hit"><circle cx="${at[0]}" cy="${at[1]}" r="24" fill="#000" fill-opacity="0"/>${card(a, at, layout, o, levels?.cores ?? 1)}</g>`
 
     if (hasLead && o.links && place.zone === 'work' && a.state !== 'idle') {
@@ -298,12 +384,19 @@ ${meters(levels, layout.meters)}
 /** What a reader who cannot see the drawing is told. */
 export function describeScene(stage: Stage, lang: Lang): string {
   const w = WORDS[lang]
+  const research = stage.research ?? null
+  if (research !== null) {
+    const running = research.probes.filter(p => p.status === 'running')
+    const searches = research.inFlight + running.reduce((sum, p) => sum + p.inFlight, 0)
+
+    return `${nameOf(research.agent, 60)}: ${w.state[research.agent.state]}, ${w.research.counter(searches, running.length, research.sources.length, research.sourcesCapped)}`
+  }
   const plan = stage.plan ?? null
   if (plan !== null) {
     const { done, total } = progressOf(plan.agent.plan ?? [])
 
-    return `${plan.agent.id}: ${w.state[plan.agent.state]}, ${w.stepsDone(done, total)}`
+    return `${nameOf(plan.agent, 60)}: ${w.state[plan.agent.state]}, ${w.stepsDone(done, total)}`
   }
 
-  return stage.agents.map(a => `${a.id}: ${w.state[a.state]}`).join(', ') || w.worktrees(0)
+  return stage.agents.map(a => `${nameOf(a, 60)}: ${w.state[a.state]}${(a.subagents?.length ?? 0) > 0 ? `, ${w.subagents(a.subagents?.length ?? 0)}` : ''}`).join(', ') || w.worktrees(0)
 }

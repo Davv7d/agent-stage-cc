@@ -6,6 +6,7 @@ import type {
   Snapshot,
 } from '../../types'
 import { mendPlan } from './plan'
+import { isResearch } from './research'
 
 export const STATES = [
   'idle',
@@ -67,11 +68,17 @@ export function isAgentRecord(value: unknown): value is AgentRecord {
  * open pull request without its address, which nothing could ever close.
  */
 export function mend(stored: AgentRecord): AgentRecord {
-  const { plan: raw, ...bare } = stored
+  // Research this version cannot read is left out: it is kept anew from the next spawn.
+  const { research: _unread, ...known } = stored
+  const studied: AgentRecord = stored.research === undefined || isResearch(stored.research) ? stored : known
+  // A title is text, or it is not there.
+  const { title: odd, ...untitled } = studied
+  const read: AgentRecord = odd === undefined || typeof odd === 'string' ? studied : untitled
+  const { plan: raw, ...bare } = read
   const plan = mendPlan(raw)
   // A record with nothing to mend is handed back as it is.
   const isSound = raw === undefined || (plan !== undefined && plan.length === raw.length)
-  const rec: AgentRecord = isSound ? stored : plan === undefined ? bare : { ...bare, plan }
+  const rec: AgentRecord = isSound ? read : plan === undefined ? bare : { ...bare, plan }
   const url: unknown = rec.pr?.url
   if (rec.pr === undefined || typeof url === 'string') return rec
   const { pr: _unknown, ...rest } = rec

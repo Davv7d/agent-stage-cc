@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, ToolCallResult } from 'claude-code'
 
 import type { AgentRecord, Limit, ResourceView, Snapshot, Stage, Usage, UsageReport, ViewMode, ViewToggles } from '../types'
 import { bandItems, noticesBetween, statusText, toBrief } from './core/brief'
@@ -7,8 +7,10 @@ import type { Tone } from './core/brief'
 import type { Notice } from './core/brief'
 import { DEFAULTS, GLOBAL_CONFIG, GUIDE, PROJECT_CONFIG, readConfig, readProjectConfig, viewOf } from './core/config'
 import type { Config } from './core/config'
-import { demoPlanSnapshot, demoSnapshot, demoUsage } from './core/demo'
-import { describeModes, loadModes, MODE_ENDED, modeBrief } from './core/modes'
+import { demoPlanSnapshot, demoResearchSnapshot, demoSnapshot, demoUsage } from './core/demo'
+import { describeModes, loadModes, MODE_ENDED, modeBrief, startingMode } from './core/modes'
+import { findRules, hasRules, NO_RULES_NOTICE, rulesBrief } from './core/rules'
+import type { Rules } from './core/rules'
 import type { Mode } from './core/modes'
 import { isPlanTool, isSessionList } from './core/plan'
 import { classify, DEFAULT_PATTERNS } from './core/derive'
@@ -19,6 +21,7 @@ import { EMPTY, newRecord, toSnapshot } from './core/model'
 import type { Identity } from './core/model'
 import { apply } from './core/reduce'
 import type { StageEvent } from './core/reduce'
+import { isSearchCall, sourcesOf } from './core/research'
 import {
   applyOp,
   describeResource,
@@ -44,12 +47,13 @@ import {
 import type { Machine, Sys } from './core/usage'
 import { appleLanguage, langFrom, namesLanguage, WORDS } from './scene/labels'
 import type { Lang } from './scene/labels'
-import { fitLayout, fitPlan } from './scene/layout'
+import { fitLayout, fitPlan, fitResearch } from './scene/layout'
 import type { Layout } from './scene/layout'
 import { neon } from './scene/neon'
 import { renderPlan } from './scene/plan'
+import { renderResearch, researchRows } from './scene/research'
 import { ASK, BAD, WARN } from './scene/skin'
-import { describeScene, MAX_SOURCE, renderScene } from './scene/scene'
+import { describeScene, MAX_SOURCE, nameOf, renderScene } from './scene/scene'
 import { advance } from './scene/stage'
 
 const PANE = 'agent-stage'
@@ -94,6 +98,12 @@ const strings = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []
 /** A change of the last action alone is written at most this often. */
 const QUIET_WRITE_MS = 3000
+/**
+ * A change of the research alone (a search begun or ended) is written at
+ * most this often, however many run at once; the last one is written once
+ * the time is up.
+ */
+const RESEARCH_WRITE_MS = 1000
 
 const snapshot = atom({ plugin: 'agent-stage-cc', key: 'snapshot' } as const, EMPTY, {
   shape: 'snapshot-2',
@@ -109,8 +119,12 @@ const demo = atom({ plugin: 'agent-stage-cc', key: 'demo' } as const, false)
 const viewMode = atom({ plugin: 'agent-stage-cc', key: 'viewMode' } as const, null)
 /** The working mode turned on for the session, by name: kept over a reload. */
 const workMode = atom({ plugin: 'agent-stage-cc', key: 'workMode' } as const, null)
+/** That mode is the project's default, on from the start, not one the person turned on. */
+const isWorkModeDefault = atom({ plugin: 'agent-stage-cc', key: 'isWorkModeDefault' } as const, false)
 const briefNow = atom({ plugin: 'agent-stage-cc', key: 'brief' } as const, null, { shape: 'brief-4' })
 const bandHidden = atom({ plugin: 'agent-stage-cc', key: 'bandHidden' } as const, false)
+/** The person was told the folder has no rules for agents: once a session. */
+const isRulesNoted = atom({ plugin: 'agent-stage-cc', key: 'isRulesNoted' } as const, false)
 
 /** The band's colors: one per figure, amber and red for what runs out. */
 const TONES: Record<Tone, string> = {
@@ -119,12 +133,12 @@ const TONES: Record<Tone, string> = {
 }
 
 const VIEWS: Record<Lang, Record<ViewMode, string>> = {
-  en: { auto: 'View: auto', team: 'View: team', plan: 'View: plan' },
-  pl: { auto: 'Widok: auto', team: 'Widok: zespół', plan: 'Widok: plan' },
+  en: { auto: 'View: auto', team: 'View: team', plan: 'View: plan', research: 'View: research' },
+  pl: { auto: 'Widok: auto', team: 'Widok: zespół', plan: 'Widok: plan', research: 'Widok: research' },
 }
 /** Said on the view switch when a plan is asked for and nobody keeps one. */
 const NO_PLAN: Record<Lang, string> = { en: ' (no plan yet)', pl: ' (brak planu)' }
-const NEXT_VIEW: Record<ViewMode, ViewMode> = { auto: 'team', team: 'plan', plan: 'auto' }
+const NEXT_VIEW: Record<ViewMode, ViewMode> = { auto: 'team', team: 'plan', plan: 'research', research: 'auto' }
 
 const TOGGLES: Record<Lang, Record<keyof ViewToggles, string>> = {
   en: { focus: 'Needs attention only', labels: 'State labels', links: 'Links' },
@@ -137,6 +151,15 @@ type Self = {
   rec: AgentRecord | undefined
   written: string
   writtenAt: number
+  /** The research as last written, and whether a write of a later one is due. */
+  researchWritten: string
+  /** The session's title as the app last gave it. */
+  title: string | undefined
+  isFlushDue: boolean
+  /** A save is under way, and the record changed again meanwhile. */
+  /** The save under way, if any; a change made meanwhile sets `isDirty`. */
+  saving: Promise<void> | null
+  isDirty: boolean
   isLocated: boolean
   /** What the views last got, so an unchanged poll redraws nothing. */
   shown: string
@@ -144,9 +167,17 @@ type Self = {
   polls: number
   isDemo: boolean
   /** Which invented data the demo shows. */
-  demoKind: 'team' | 'plan'
-  /** The working mode the person turned on for this session. */
+  demoKind: 'team' | 'plan' | 'research'
+  /** The working mode the person turned on for this session, or the project's default. */
   mode: Mode | null
+  /** The mode on is the project's default, not one the person turned on. */
+  isModeDefault: boolean
+  /** The default mode the project's `.agent-stage-cc.json` names, on offer or not. */
+  projectMode: string | undefined
+  /** The folder the session started in. */
+  cwd: string
+  /** The instruction files the project holds, once looked for. */
+  rules: Rules | null
   lang: Lang
   /** The language the machine itself is set to; the config may name another. */
   systemLang: Lang
@@ -224,11 +255,13 @@ async function locateSelf($: EngineInterface, self: Self, at: number): Promise<v
   }
   const sessionId = await $.session.id()
   const stored = await load($, self.who.stateDir, self.who.id)
-  self.rec = {
-    ...(stored ?? newRecord(self.who, sessionId, at)),
-    worktree: self.who.worktree,
-    branch: self.who.branch,
-  }
+  // Only this session writes its record, and what it holds may be ahead of
+  // the file: a write still under way, research written once a second. It is
+  // read from the file only when this session holds none, or another session
+  // took the worktree since.
+  const isOwn = self.rec !== undefined && self.rec.id === self.who.id && self.rec.sessionId === (stored?.sessionId ?? self.rec.sessionId)
+  const base = isOwn && self.rec !== undefined ? self.rec : (stored ?? newRecord(self.who, sessionId, at))
+  self.rec = { ...base, worktree: self.who.worktree, branch: self.who.branch }
 }
 
 async function emit(
@@ -242,15 +275,83 @@ async function emit(
     if (self.rec === undefined || self.who === undefined) return
     const before = self.rec
     self.rec = apply(self.rec, make(at))
-    const { updatedAt: _a, lastAction: _b, lastActionAt: _c, ...core } = self.rec
+    const { updatedAt: _a, lastAction: _b, lastActionAt: _c, research, ...core } = self.rec
     const key = JSON.stringify(core)
-    if (key === self.written && at - self.writtenAt < QUIET_WRITE_MS) return
-    self.written = key
-    self.writtenAt = at
-    await save($, self.who.stateDir, self.rec)
-    if (before.state !== self.rec.state) void refresh($, self)
+    // The research alone changes with every search begun or ended: however
+    // many run at once, it is written at most once a second.
+    const isResearchWritten = JSON.stringify(research ?? null) === self.researchWritten
+    if (key === self.written && at - self.writtenAt < (isResearchWritten ? QUIET_WRITE_MS : RESEARCH_WRITE_MS)) {
+      if (!isResearchWritten) flushLater($, self)
+
+      return
+    }
+    await store($, self, at)
+    if (before.state !== self.rec.state || probesOut(before) !== probesOut(self.rec)) void refresh($, self)
   } catch {
     // The stage watches; it never gets in the way of the work.
+  }
+}
+
+const probesOut = (rec: AgentRecord) => rec.research?.probes.filter(p => p.status === 'running').length ?? 0
+
+/**
+ * Writes the record as it is now. Calls that run at once end at once: a save
+ * asked for while one is under way is not made beside it; the one under way
+ * writes the latest record again when it is done.
+ */
+async function store($: EngineInterface, self: Self, at: number): Promise<void> {
+  if (self.rec === undefined || self.who === undefined) return
+  const { updatedAt: _a, lastAction: _b, lastActionAt: _c, research, ...core } = self.rec
+  self.written = JSON.stringify(core)
+  self.researchWritten = JSON.stringify(research ?? null)
+  self.writtenAt = at
+  // A save under way writes the latest record again before it settles: wait
+  // for it, so that whoever reads the file next finds this record there.
+  while (self.saving !== null) {
+    self.isDirty = true
+    await self.saving
+    if (!self.isDirty) return
+  }
+  self.saving = saveLatest($, self)
+  try {
+    await self.saving
+  } finally {
+    self.saving = null
+  }
+}
+
+/** Writes the record, and again for as long as it changed while being written. */
+async function saveLatest($: EngineInterface, self: Self): Promise<void> {
+  do {
+    self.isDirty = false
+    const [rec, who] = [self.rec, self.who]
+    if (rec === undefined || who === undefined) break
+    await save($, who.stateDir, rec)
+  } while (self.isDirty)
+}
+
+/** The research's last change is written once its second is up, so no count is left behind. */
+function flushLater($: EngineInterface, self: Self): void {
+  if (self.isFlushDue) return
+  self.isFlushDue = true
+  $.clock.after(RESEARCH_WRITE_MS, () => void flush($, self))
+}
+
+/** The session's title as the app gave it now, kept in the record when it is new. */
+async function titled($: EngineInterface, self: Self, title: unknown): Promise<void> {
+  if (typeof title !== 'string' || title === self.title) return
+  self.title = title
+  await emit($, self, at => ({ kind: 'title', at, title }))
+}
+
+/** Writes what of the research is not written yet. */
+async function flush($: EngineInterface, self: Self): Promise<void> {
+  self.isFlushDue = false
+  try {
+    if (self.rec === undefined || JSON.stringify(self.rec.research ?? null) === self.researchWritten) return
+    await store($, self, await $.clock.now())
+  } catch {
+    // Written with the next change instead.
   }
 }
 
@@ -307,7 +408,9 @@ async function sampleUsage(
 async function modesHere($: EngineInterface, self: Self): Promise<Mode[]> {
   if (!self.isLocated) await locateSelf($, self, await $.clock.now()).catch(() => undefined)
 
-  return loadModes($, await $.env.get('HOME'), self.who?.worktree)
+  const root = rootOf(self)
+
+  return loadModes($, await $.env.get('HOME'), root === '' ? undefined : root)
 }
 
 /**
@@ -317,23 +420,30 @@ async function modesHere($: EngineInterface, self: Self): Promise<Mode[]> {
 async function modeCommand($: EngineInterface, self: Self, wanted: string | undefined): Promise<{ text: string; context?: string[] }> {
   const modes = await modesHere($, self)
   const name = wanted?.toLowerCase()
-  if (name === undefined || name === '') return { text: describeModes(modes, self.mode?.name) }
+  if (name === undefined || name === '') return { text: describeModes(modes, self.mode?.name, self.projectMode) }
   if (name === 'off') {
     const was = self.mode
     self.mode = null
+    self.isModeDefault = false
     await update($, workMode, () => null)
+    await update($, isWorkModeDefault, () => false)
     // The view the mode held goes back to the config's.
     if (was !== null) await update($, viewMode, () => null)
     await emit($, self, at => ({ kind: 'mode', at, name: null }))
     await refresh($, self)
 
-    return was === null ? { text: 'No working mode was on.' } : { text: `Working mode "${was.name}" is off.`, context: [MODE_ENDED] }
+    // Off is off for the session: the project's default waits for the next one.
+    const stays = modes.some(m => m.name === self.projectMode) ? ` The project's default, ${self.projectMode ?? ''}, stays off until this session ends.` : ''
+
+    return was === null ? { text: `No working mode was on.${stays}` } : { text: `Working mode "${was.name}" is off.${stays}`, context: [MODE_ENDED] }
   }
   const mode = modes.find(m => m.name === name)
-  if (mode === undefined) return { text: `No working mode "${name}". ${describeModes(modes, self.mode?.name)}` }
+  if (mode === undefined) return { text: `No working mode "${name}". ${describeModes(modes, self.mode?.name, self.projectMode)}` }
   self.mode = mode
+  self.isModeDefault = false
   self.writtenAt = 0
   await update($, workMode, () => mode.name)
+  await update($, isWorkModeDefault, () => false)
   await emit($, self, at => ({ kind: 'mode', at, name: mode.name, ...(mode.role === undefined ? {} : { role: mode.role }) }))
   // A mode is watched on the scene it names: its own agent's plan, or the team.
   await update($, viewMode, () => mode.view)
@@ -347,16 +457,64 @@ async function modeCommand($: EngineInterface, self: Self, wanted: string | unde
 }
 
 /**
+ * The mode the session starts in: the one kept over a reload, none if the
+ * person turned it off, or else the project's default, which is then kept,
+ * drawn, watched on its scene and told, once a session.
+ */
+async function startMode($: EngineInterface, self: Self, isInteractive: boolean): Promise<void> {
+  try {
+    // Never written: nothing was turned on or off in this session yet.
+    const kept = (await $.state.get({ plugin: 'agent-stage-cc', key: 'workMode' } as const)).value
+    const start = startingMode(await modesHere($, self).catch(() => []), kept, self.projectMode, await read($, isWorkModeDefault))
+    self.mode = start?.mode ?? null
+    self.isModeDefault = start?.isProjectDefault === true
+    // A reload finds the default kept, and says nothing twice.
+    if (start === null || !start.isProjectDefault || kept === start.mode.name) return
+    const mode = start.mode
+    await update($, workMode, () => mode.name)
+    await update($, isWorkModeDefault, () => true)
+    self.writtenAt = 0
+    await emit($, self, at => ({ kind: 'mode', at, name: mode.name, ...(mode.role === undefined ? {} : { role: mode.role }) }))
+    // Watched on the scene it names, unless the person picked one in this session.
+    const picked = await $.state.get({ plugin: 'agent-stage-cc', key: 'viewMode' } as const)
+    if (picked.value === undefined) await update($, viewMode, () => mode.view)
+    if (isInteractive) $.ui.toast(`Working mode "${mode.name}" is on: the project's default. /stage agent off ends it.`)
+  } catch {
+    // A session starts whatever its mode; it can still be turned on by name.
+  }
+}
+
+/**
  * The person's settings and the project's own patterns, read again now and
  * then so an edit takes hold without a restart. A missing file is the defaults.
  */
+/** The project's folder: the repository's top, or the folder the session started in outside one. */
+const rootOf = (self: Self) => self.who?.worktree ?? self.cwd
+
+/** Looks again for the project's instruction files: AGENTS.md, CLAUDE.md. */
+async function readRules($: EngineInterface, self: Self): Promise<void> {
+  const root = rootOf(self)
+  if (root === '') return
+  self.rules = await findRules($, self.cwd === '' ? [root] : [root, self.cwd])
+}
+
+/** Where no rules are written down, the person hears once a session that init writes them. */
+async function noteRules($: EngineInterface, self: Self, isInteractive: boolean): Promise<void> {
+  if (!self.config.projectRules || !isInteractive || self.rules === null || hasRules(self.rules)) return
+  if (self.mode?.name === 'init' || (await read($, isRulesNoted))) return
+  await update($, isRulesNoted, () => true)
+  $.ui.toast(NO_RULES_NOTICE)
+}
+
 async function loadConfig($: EngineInterface, self: Self): Promise<void> {
   const home = await $.env.get('HOME')
   const mine = home === undefined ? '' : await $.fs.read(`${home}/${GLOBAL_CONFIG}`).catch(() => '')
   self.config = mine === '' ? DEFAULTS : readConfig(mine)
   self.lang = self.config.language === 'auto' ? self.systemLang : self.config.language
-  const theirs = self.who === undefined ? '' : await $.fs.read(`${self.who.worktree}/${PROJECT_CONFIG}`).catch(() => '')
+  const root = rootOf(self)
+  const theirs = root === '' ? '' : await $.fs.read(`${root}/${PROJECT_CONFIG}`).catch(() => '')
   const project = theirs === '' ? {} : readProjectConfig(theirs)
+  self.projectMode = project.mode
   self.patterns = {
     test: project.test ?? DEFAULT_PATTERNS.test,
     coordinate: project.coordinate ?? DEFAULT_PATTERNS.coordinate,
@@ -432,9 +590,17 @@ async function refresh($: EngineInterface, self: Self): Promise<void> {
       self.paneWritten = self.pane
       await $.fs.write(`${self.who.stateDir}/pane.json`, self.pane)
     }
+    const mode = (await read($, viewMode)) ?? self.config.view
+    // A pane that shows the research keeps the record of it from now on: held
+    // to it, or left to a mode that is watched on it.
+    if ((mode === 'research' || self.mode?.view === 'research') && !self.isDemo && self.rec !== undefined && self.rec.research === undefined) {
+      await emit($, self, at => ({ kind: 'research-watch', at }))
+    }
     let next: Snapshot
     if (self.isDemo) {
-      next = self.demoKind === 'plan' ? demoPlanSnapshot(self.polls, now) : demoSnapshot(Math.floor(self.polls / 2), now)
+      next = self.demoKind === 'plan'
+        ? demoPlanSnapshot(self.polls, now)
+        : self.demoKind === 'research' ? demoResearchSnapshot(self.polls, now) : demoSnapshot(Math.floor(self.polls / 2), now)
       self.usage = demoUsage(next)
     } else {
       if (self.who === undefined) return
@@ -458,7 +624,6 @@ async function refresh($: EngineInterface, self: Self): Promise<void> {
     }
     await brief($, self, next)
     // The scene is redrawn only when what a person would see has changed.
-    const mode = (await read($, viewMode)) ?? self.config.view
     const stage = advance(self.stage, next, self.usage, now, { view: mode, ...(self.who === undefined ? {} : { self: self.who.id }) })
     if (stage !== self.stage) {
       self.stage = stage
@@ -536,7 +701,8 @@ async function resourceAction(
 export const register: Register = on => {
   const self: Self = {
     who: undefined, rec: undefined, written: '', writtenAt: 0, isLocated: false,
-    shown: '', stage: null, polls: 0, isDemo: false, demoKind: 'team', mode: null, lang: 'en', systemLang: 'en', utcOffsetMinutes: 0,
+    researchWritten: 'null', title: undefined, isFlushDue: false, saving: null, isDirty: false,
+    shown: '', stage: null, polls: 0, isDemo: false, demoKind: 'team', mode: null, isModeDefault: false, projectMode: undefined, cwd: '', rules: null, lang: 'en', systemLang: 'en', utcOffsetMinutes: 0,
     pane: '', paneWritten: '', images: null, config: DEFAULTS, patterns: DEFAULT_PATTERNS, last: null, briefShown: '',
     machine: undefined, cpuSeconds: null, system: null, sampledAt: 0, containers: {}, usage: null, limits: [], sessionId: '', trouble: '',
   }
@@ -545,7 +711,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'stage',
       description: 'Open the Agent Stage pane',
-      argumentHint: '[agent <mode>|demo [plan]|live|view <auto|team|plan>|band|status|grant <agent>|release|queue <agent>|order <agents>]',
+      argumentHint: '[agent <mode>|demo [plan|research]|live|view <auto|team|plan|research>|band|status|grant <agent>|release|queue <agent>|order <agents>]',
     })
     await $.tool.register({
       name: 'resource',
@@ -554,26 +720,51 @@ export const register: Register = on => {
       isDeferred: false,
     })
     await readLocale($, self)
+    // Located first, so that the project's own file is read with the person's.
+    self.cwd = await $.session.cwd().catch(() => '')
+    if (!self.isLocated) await $.clock.now().then(at => locateSelf($, self, at)).catch(() => undefined)
     await loadConfig($, self).catch(() => undefined)
+    await readRules($, self).catch(() => undefined)
     self.isDemo = await read($, demo)
-    const kept = await read($, workMode)
-    if (typeof kept === 'string') self.mode = (await modesHere($, self).catch(() => [])).find(m => m.name === kept) ?? null
     const sessionId = await $.session.id()
     await emit($, self, at => ({ kind: 'session-start', at, sessionId }))
+    await startMode($, self, e.isInteractive)
+    await noteRules($, self, e.isInteractive).catch(() => undefined)
+    // A title heard before the session's start was the session's own: the start set the record anew.
+    if (self.title !== undefined) {
+      const title = self.title
+      await emit($, self, at => ({ kind: 'title', at, title }))
+    }
     void refresh($, self)
     $.clock.every(self.config.refreshMs, () => void refresh($, self))
 
     return next(e)
   })
 
+  // The session's title, as the app lists the session: the stage names the agent by it.
+  on('classic.SessionStart', async ($, e, next) => {
+    await titled($, self, e.session_title)
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    await titled($, self, e.session_title)
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   // How to keep the stage's record, told once in each session's instructions.
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)
+    // The project's rules come first: AGENTS.md, or a nudge to write one. Looked for anew, since init may have written them.
+    await readRules($, self).catch(() => undefined)
+    const said = self.config.projectRules && self.rules !== null ? rulesBrief(self.rules, self.mode?.name === 'init') : undefined
+    const rules = said === undefined ? [] : [{ id: 'agent-stage-cc:rules', text: said, scope: 'session' as const }]
     // A working mode's rules head every new thread while the mode is on.
-    const mode = self.mode === null ? [] : [{ id: 'agent-stage-cc:mode', text: modeBrief(self.mode), scope: 'session' as const }]
+    const mode = self.mode === null ? [] : [{ id: 'agent-stage-cc:mode', text: modeBrief(self.mode, self.isModeDefault), scope: 'session' as const }]
     const guide = self.config.guide ? [{ id: 'agent-stage-cc:guide', text: GUIDE, scope: 'session' as const }] : []
 
-    return { sections: [...composed.sections, ...guide, ...mode] }
+    return { sections: [...composed.sections, ...rules, ...guide, ...mode] }
   })
 
   on('session.end', async ($, e, next) => {
@@ -583,31 +774,68 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // A subagent the session starts is a probe of its research, named by what it was sent for.
+  on('agent.spawn', async ($, e, next) => {
+    const started = await next(e)
+    const id = started.agentId
+    if (id !== undefined) {
+      const label = e.description.trim() || e.name?.trim() || e.subagentType
+      self.writtenAt = 0
+      await emit($, self, at => ({ kind: 'probe-start', at, id, label, isBackground: e.background }))
+    }
+
+    return started
+  }).catch(($, e, next) => next(e))
+
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
+      // What is not written yet is written before the record is read again.
+      await flush($, self)
       self.isLocated = false
       await emit($, self, at => ({ kind: 'turn-start', at }))
+    } else {
+      // A probe woken for another turn is at work again.
+      const id = e.agentId
+      void emit($, self, at => ({ kind: 'probe-start', at, id }))
     }
 
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
-    if (e.agentId === undefined) {
+    const id = e.agentId
+    if (id === undefined) {
       self.writtenAt = 0
       await emit($, self, at => ({ kind: 'turn-end', at, answer: e.answer, reason: e.reason }))
+    } else if (self.rec?.research?.probes.some(p => p.id === id) === true) {
+      // A probe is done when its own turn ends, and the stage is told at once.
+      self.writtenAt = 0
+      await emit($, self, at => ({ kind: 'probe-end', at, id, reason: e.reason }))
     }
 
     return next(e)
   })
 
   on('tool.call', async ($, e, next) => {
-    const action = classify(String(e.tool), e as unknown as Record<string, unknown>, self.patterns)
-    await emit($, self, at => ({ kind: 'tool-start', at, action }))
-    const ran = await next(e)
+    const tool = String(e.tool)
+    const call = e as unknown as Record<string, unknown>
+    const action = classify(tool, call, self.patterns)
+    // A search counts where it runs: in a probe's loop, or the session's own.
+    const where = { ...(e.agentId === undefined ? {} : { loop: e.agentId }), ...(isSearchCall(tool, action) ? { isSearch: true } : {}) }
+    await emit($, self, at => ({ kind: 'tool-start', at, action, ...where }))
+    let ran: ToolCallResult
+    try {
+      ran = await next(e)
+    } catch (error) {
+      // A call that broke off still ends, so nothing stays counted as running;
+      // broken off, as when the person stops a test run, is not failed.
+      await emit($, self, at => ({ kind: 'tool-end', at, action, isError: false, ...where }))
+      throw error
+    }
     const isError = ran.deny !== undefined || ran.isError === true
     const output = ran.deny === undefined && typeof ran.text === 'string' ? ran.text : ''
-    await emit($, self, at => ({ kind: 'tool-end', at, action, isError, output }))
+    const found = where.isSearch === true && !isError ? sourcesOf(tool, call, ran.result, output) : []
+    await emit($, self, at => ({ kind: 'tool-end', at, action, isError, output, ...where, ...(found.length > 0 ? { found } : {}) }))
     // A subagent's own list is not the session's plan; the tasks it files are.
     if (!isError && isPlanTool(String(e.tool)) && (e.agentId === undefined || isSessionList(String(e.tool)))) {
       const input = e as unknown as Record<string, unknown>
@@ -638,17 +866,21 @@ export const register: Register = on => {
     if (verb === 'agent') return modeCommand($, self, rest[0])
     if (verb === 'view') {
       const picked = viewOf(rest[0]?.toLowerCase())
-      if (picked === undefined) return { text: 'Usage: /stage view auto|team|plan' }
+      if (picked === undefined) return { text: 'Usage: /stage view auto|team|plan|research' }
       await update($, viewMode, () => picked)
       await refresh($, self)
       // Asked for a plan where nobody keeps one, the pane would show the team unexplained.
-      const shown = (self.stage?.plan ?? null) === null ? 'the team' : `the plan of ${self.stage?.plan?.agent.id ?? ''}`
+      const research = self.stage?.research ?? null
+      const shown = research !== null
+        ? `the research of ${research.agent.id}`
+        : (self.stage?.plan ?? null) === null ? 'the team' : `the plan of ${self.stage?.plan?.agent.id ?? ''}`
       said = picked === 'plan' && (self.stage?.plan ?? null) === null
         ? ' View: plan. No agent keeps a task list right now, so the team is shown until one does.'
         : ` View: ${picked}, showing ${shown}.`
     } else if (verb === 'demo' || verb === 'live') {
       self.isDemo = verb === 'demo'
-      self.demoKind = rest[0]?.toLowerCase() === 'plan' ? 'plan' : 'team'
+      const kind = rest[0]?.toLowerCase()
+      self.demoKind = kind === 'plan' || kind === 'research' ? kind : 'team'
       self.stage = null
       // Figures of the other mode are not this one's.
       self.usage = null
@@ -682,16 +914,25 @@ export const register: Register = on => {
 
     // A surface without a vector element gets the same facts as a list.
     const marks = { done: '✓', active: '▸', pending: '·' } as const
+    const research = stage.research ?? null
+    // The research's own plan is its phases: listed as a plan's steps are.
+    const steps = stage.plan?.steps ?? (research?.agent.plan ?? []).map((s, i) => ({ key: `${i}`, ordinal: i + 1, text: s.text, status: s.status }))
     const list = (
       <Box flexDirection="column">
-        {(stage.plan?.steps ?? []).map(s => (
+        {(research === null ? [] : researchRows(research, self.lang)).map(row => (
+          <Text key={row.key} color={row.tone === 'bad' ? BAD : row.tone === 'ask' ? ASK : undefined} dimColor={row.isDim === true}>
+            {row.text}
+          </Text>
+        ))}
+        {steps.map(s => (
           <Text key={`step-${s.key}`} dimColor={s.status === 'pending'}>
             {marks[s.status]} {s.ordinal}. {s.text}
           </Text>
         ))}
         {[...(stage.coordinator === null ? [] : [stage.coordinator]), ...stage.agents].map(a => (
           <Text color={a.needsAttention ? '#ff5fa2' : undefined} dimColor={a.isAsleep}>
-            {a.id} · {a.isAsleep ? words.asleep : words.state[a.state]}
+            {nameOf(a, 60)} · {a.isAsleep ? words.asleep : words.state[a.state]}
+            {(a.subagents?.length ?? 0) === 0 ? '' : ` · ${words.subagents(a.subagents?.length ?? 0)}`}
             {a.lastAction === '' ? '' : ` · ${a.lastAction}`}
           </Text>
         ))}
@@ -700,8 +941,9 @@ export const register: Register = on => {
     if (e.surface === 'terminal') return list
 
     const plan = stage.plan ?? null
-    const planFit = plan === null ? null : fitPlan(e.props.bodyColumns, e.props.scroll.bodyRows, stage.resource !== null)
-    const { layout, pixelWidth, pixelHeight } = planFit ?? fitLayout(e.props.bodyColumns, e.props.scroll.bodyRows, stage.resource !== null)
+    const researchFit = research === null ? null : fitResearch(e.props.bodyColumns, e.props.scroll.bodyRows)
+    const planFit = plan === null || researchFit !== null ? null : fitPlan(e.props.bodyColumns, e.props.scroll.bodyRows, stage.resource !== null)
+    const { layout, pixelWidth, pixelHeight } = researchFit ?? planFit ?? fitLayout(e.props.bodyColumns, e.props.scroll.bodyRows, stage.resource !== null)
     self.pane = JSON.stringify({
       bodyColumns: e.props.bodyColumns,
       bodyRows: e.props.scroll.bodyRows,
@@ -710,9 +952,11 @@ export const register: Register = on => {
       pixelHeight,
     })
     const options = { ...toggles, lang: self.lang, utcOffsetMinutes: self.utcOffsetMinutes, pixelWidth, pixelHeight }
-    const source = plan !== null && planFit !== null
-      ? renderPlan(stage, plan, planFit.layout, neon, options)
-      : renderScene(stage, layout as Layout, neon, options)
+    const source = research !== null && researchFit !== null
+      ? renderResearch(stage, research, researchFit.layout, neon, options)
+      : plan !== null && planFit !== null
+        ? renderPlan(stage, plan, planFit.layout, neon, options)
+        : renderScene(stage, layout as Layout, neon, options)
     if (source.length > MAX_SOURCE) return list
     const { Svg } = $.ui.resolve(e)
     const names = TOGGLES[self.lang]

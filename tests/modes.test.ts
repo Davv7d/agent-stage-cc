@@ -49,8 +49,27 @@ test('coordinating is a mode too: tasks in, work out, the shared resource kept i
   expect(mode.text).toContain("decided by the person's instructions and the project's rules")
 })
 
+test('researching is a mode too: the question first, probes in parallel, every claim sourced', async () => {
+  const mode = BUILT_IN.find(m => m.name === 'research')
+  if (mode === undefined) throw new Error('no research mode')
+  expect(mode.view).toBe('research')
+  expect(mode.role).toBe(undefined)
+  expect(mode.text.startsWith('# Research a topic')).toBe(true)
+  const order = ['Question', 'Research plan', 'Gathering', 'Verification', 'Report'].map(p => mode.text.indexOf(`**${p}.**`))
+  expect(order.every((at, i) => at > 0 && (i === 0 || at > (order[i - 1] ?? 0)))).toBe(true)
+  // Where the report goes is asked, and a file is made only with the person's leave.
+  expect(mode.text).toContain('`research/<slug>.md`')
+  expect(mode.text).toContain('only if the person agrees')
+  expect(mode.text).toContain('at most five at a time')
+  expect(mode.text).toContain('at least two independent sources')
+  expect(mode.text).toContain('task list')
+  // Its settings are for the stage alone; a file of one's own may name the scene too.
+  expect(mode.text).not.toContain('view: research')
+  expect(toMode('dig', '---\nview: research\n---\n# Dig\n\nDig deep.', 'yours')?.view).toBe('research')
+})
+
 test('the built-in modes: plan first, the whole task in one run, and coordinating', async () => {
-  expect(BUILT_IN.map(m => m.name)).toEqual(['plan', 'full', 'coordinate'])
+  expect(BUILT_IN.map(m => m.name)).toEqual(['plan', 'full', 'research', 'coordinate', 'init'])
   expect(BUILT_IN.slice(0, 2).map(m => m.view)).toEqual(['plan', 'plan'])
   const plan = BUILT_IN[0]?.text ?? ''
   // The phases a person asked for, in order, and the stop before the work.
@@ -60,8 +79,8 @@ test('the built-in modes: plan first, the whole task in one run, and coordinatin
   expect(plan).toContain('Then stop and wait')
   expect(plan).toContain('task list')
   expect(BUILT_IN[1]?.text).toContain('without stopping for approval')
-  // Nothing of any one project is in them.
-  for (const mode of BUILT_IN) expect(/npm|docker|pytest|yarn|make /i.test(mode.text)).toBe(false)
+  // Nothing of any one project, or of any one kind of project, is in them.
+  for (const mode of BUILT_IN) expect(/npm|pytest|yarn|make |docker/i.test(mode.text)).toBe(false)
 })
 
 test("a project's mode wins over a person's, and a person's over a built-in one", async () => {
@@ -69,10 +88,10 @@ test("a project's mode wins over a person's, and a person's over a built-in one"
   const theirs = toMode('plan', '# Team plan\n\nTheirs.', 'project')
   const extra = toMode('audit', 'Audit.', 'yours')
   if (mine === undefined || theirs === undefined || extra === undefined) throw new Error('a mode did not read')
-  expect(mergeModes(BUILT_IN, [mine, extra]).map(m => `${m.name}:${m.from}`)).toEqual(['audit:yours', 'coordinate:built-in', 'full:built-in', 'plan:yours'])
+  expect(mergeModes(BUILT_IN, [mine, extra]).map(m => `${m.name}:${m.from}`)).toEqual(['audit:yours', 'coordinate:built-in', 'full:built-in', 'init:built-in', 'plan:yours', 'research:built-in'])
   expect(mergeModes(BUILT_IN, [mine], [theirs]).find(m => m.name === 'plan')?.title).toBe('Team plan')
   expect(describeModes(mergeModes(BUILT_IN), undefined)).toBe(
-    'Working modes: coordinate (built-in), full (built-in), plan (built-in). None is on. Start one with /stage agent <name>, end it with /stage agent off.',
+    'Working modes: coordinate (built-in), full (built-in), init (built-in), plan (built-in), research (built-in). None is on. Start one with /stage agent <name>, end it with /stage agent off.',
   )
   expect(describeModes(mergeModes(BUILT_IN), 'plan')).toContain('On now: plan.')
 })

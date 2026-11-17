@@ -1,10 +1,10 @@
 # agent-stage-cc
 
 A live, animated stage for agent work in Claude Code. It sits beside the chat
-and shows what your agents are doing: one agent working through its plan, or a
-whole team in the git worktrees of your repository, with who is waiting on
-you, who holds a shared resource such as a local stack of containers, and what
-it all costs your machine.
+and shows what your agents are doing: one agent working through its plan or a
+research with its subagents, or a whole team in the git worktrees of your
+repository, with who is waiting on you, who holds a shared resource such as a
+local stack of containers, and what it all costs your machine.
 
 ![A team of agents on the stage, demo data](docs/demo.gif)
 
@@ -12,7 +12,13 @@ It is a Claude Code mod (a plugin of function hooks). It reads what agents do
 and never asks them to report anything, it enforces nothing, and it needs no
 configuration to start.
 
-## Three ways to work
+It is for any kind of work, not only code. A project's rules live in plain
+files any assistant reads, an `AGENTS.md` and a `skills/` folder, so the
+people who work on it with another assistant, without the mod, follow the
+same rules. The mod makes sure every session reads them first, and helps
+write them where there are none. See [A project's rules](#a-projects-rules).
+
+## Ways to work
 
 Start a session, say how you want to work, then say what you want done:
 
@@ -20,11 +26,13 @@ Start a session, say how you want to work, then say what you want done:
 | --- | --- | --- |
 | `/stage agent plan` | Plan first: context, requirements, a proposal, and only after you accept it, the work and a check | The agent's plan, with a gate where it waits for you |
 | `/stage agent full` | The whole task in one run, in stages, without stopping for approval | The agent's plan, moving on its own |
+| `/stage agent research` | Researches a topic you name: the question first, then subagents in parallel, each key claim checked against two sources, and a report with links | The research: its subagents, the searches in flight, the sources found |
 | `/stage agent coordinate` | Takes your tasks in, hands them out to agents in their own worktrees, watches over them and keeps the shared resource in order | The team |
+| `/stage agent init` | Sets a project up for any agent: asks what it is for, then what that kind of work needs and how it is done, sums it up, and once you agree writes `AGENTS.md` and `skills/` | The agent's plan |
 
 ![One agent working through its plan, demo data](docs/plan.gif)
 
-These three are built in. A mode is a Markdown file of rules, so you can
+These are built in. A mode is a Markdown file of rules, so you can
 replace any of them or write your own, for yourself or for a project. See
 [Working modes](#working-modes).
 
@@ -33,10 +41,12 @@ A mode is optional. Without one the stage still shows everything it can read:
 
 ## What you see
 
-- **A pane beside the chat** with one of two scenes. *The team*: a
+- **A pane beside the chat** with one of three scenes. *The team*: a
   coordinator, the agents at work, a queue, the shared resource and open pull
   requests. *A plan*: one agent and the steps of its task list, moving from
-  waiting, through in progress, to done. The layout follows the pane's shape.
+  waiting, through in progress, to done. *Research*: one agent, the subagents
+  it sent out, the searches running at this moment and the sources found. The
+  layout follows the pane's shape.
 - **A row above the prompt** with bare figures in fixed colors: CPU and
   memory, each as the stage's own share and then the whole machine, what is
   left of your Claude rate limits, open questions and failed tests. Hover a
@@ -44,6 +54,8 @@ A mode is optional. Without one the stage still shows everything it can read:
 - **The same figures in the status line**, with short names.
 - **Notifications** when an agent asks you something, its tests fail, or the
   shared resource is released.
+- **A toast** when a project's default mode turns on, and once a session where
+  a folder has no rules for agents yet.
 
 ## Install
 
@@ -77,8 +89,9 @@ opens the pane with an invented team that walks through every state, and
 /stage demo plan
 ```
 
-shows one invented agent working through a plan. `/stage live` returns to
-real data.
+shows one invented agent working through a plan. `/stage demo research`
+shows an invented researcher whose subagents start, search and finish while
+the sources pile up. `/stage live` returns to real data.
 
 ## Working modes
 
@@ -91,8 +104,8 @@ want:
 ```
 
 A mode says how the agent works; a view is what the pane draws (see
-[Two scenes](#two-scenes)). Turning a mode on picks the view that suits it,
-so one command is enough. `/stage agent` lists the modes on offer, and
+[Three scenes](#three-scenes)). Turning a mode on picks the view that suits
+it, so one command is enough. `/stage agent` lists the modes on offer, and
 `/stage agent off` ends the one that is on.
 
 ### The built-in modes
@@ -103,31 +116,72 @@ so one command is enough. `/stage agent` lists the modes on offer, and
   once you accept the proposal does the work begin, followed by a check.
 - **`full`**: the whole task in one run. The same stages, without stopping for
   approval between them.
+- **`research`**: you name a topic and the agent researches it. It restates
+  the question, asks where the report should go (in the chat, or a file such
+  as `research/<slug>.md`, made only if you agree), how deep to go, and
+  whether you have sources of your own, such as your documents: those are
+  read first. It splits the topic into sub-questions, sends one subagent
+  after each, at most five at a time unless you say otherwise, checks each
+  key claim against two independent sources, and reports the answer first,
+  then the findings, each with where it stands so you can find it yourself:
+  a web page's exact address, or your document with its page or section.
 - **`coordinate`**: the session takes your tasks in, splits them, hands each
   piece to an agent in a worktree of its own, watches over them and brings
   their questions and results to you. It also keeps the record of the shared
   resource: who holds it, who waits, and in what order. Who goes first stays
   yours and the project's to decide.
+- **`init`**: set the project up for any agent, so that everyone who works
+  in it, on any machine and with any assistant, starts ready. The agent first
+  asks what the project is for (software, writing, research, data or anything
+  else) and which language the files should be written in, and fits its
+  questions to the answers. It reads what the folder already holds, follows
+  the rules of an AGENTS.md that is there already and builds on it, asks
+  whether the project has a repository the setup belongs in (and clones it
+  where it is elsewhere), then asks what this kind of work needs and how work
+  is done here. It sums that up in a few lines with the files it
+  would write, asks whether that is everything, and waits. Once you agree it
+  writes:
+  - `AGENTS.md`, the project's rules for any agent, saying that they come
+    first and listing the skills with when to read each;
+  - `skills/`, one plain Markdown file per skill, such as
+    `testing_rules.md`, with scripts or folders a skill needs;
+  - nothing that only one assistant reads unless you ask: a `CLAUDE.md` that
+    exists gets an `@AGENTS.md` line, and settings for one assistant, or the
+    project's default mode in `.agent-stage-cc.json`, come on request.
+
+  The files go into the repository unless you say they must stay out of it,
+  and it commits and pushes only when you agree. In an existing project it
+  asks only about the gaps, and it changes no file without showing you the
+  change. Its phases are its task list, as in `plan`.
+
+![The research scene: subagents on an orbit, the sources read first and marked, one source's exact address on hover, demo data](docs/research.png)
+
+Every mode tells the agent to speak the language you write in, whatever
+language the mode is written in, and that the project's own rules in its
+AGENTS.md come first where the two differ (see
+[A project's rules](#a-projects-rules)).
 
 `plan` and `full` tell the agent to keep the phases as its task list, so the
 pane shows them as the plan: which phase is in progress, which are done, and
-the gate where the agent waits for you. `coordinate` makes the session the
-coordinator at once and shows the team.
+the gate where the agent waits for you. `research` keeps its phases as a list
+too, and shows the research scene with the phase in progress at its top.
+`coordinate` makes the session the coordinator at once and shows the team.
 
 ### Your own modes
 
 A mode is a Markdown file named `<mode>.md`:
 
 - yours, in `~/.config/agent-stage-cc/modes/`
-- a project's, in `.agent-stage-cc/modes/` of the repository
+- a project's, in `.agent-stage-cc/modes/` of the repository, or of the
+  folder the session starts in outside one
 
 A project's mode takes precedence over yours of the same name, and yours over
 a built-in one, so a `plan.md` of your own replaces the built-in `plan`. The
 file's text is what the agent reads; its first heading is the mode's title.
 
 A mode is watched on its agent's plan unless the file opens with settings
-that say otherwise. The settings are for the stage and are not shown to the
-agent:
+that say otherwise (`view: team` or `view: research`). The settings are for
+the stage and are not shown to the agent:
 
 ```markdown
 ---
@@ -139,34 +193,130 @@ role: coordinator
 Hand the work out, ...
 ```
 
+### A project's default mode
+
+A project can name the mode every session in it starts with, in
+`.agent-stage-cc.json` at its root (the repository's, or the folder's outside
+one):
+
+```json
+{ "mode": "plan" }
+```
+
+The mode is then on from the start, on any machine and for anyone who has the
+mod installed. The agent reads its rules from the first message and is told
+they are the project's, the pane is held to the mode's scene, and a toast
+says the mode is on. `/stage agent` names the default.
+
+- A mode you turn on in the session wins over the default.
+- `/stage agent off` ends it for the rest of the session, a reload of the mod
+  included. The next session starts with it again.
+- A name that is no mode turns nothing on, and `/stage agent` says so.
+- The default is read when a session starts, so a change to it takes hold in
+  the next session.
+
+Each machine needs the mod; people who work without it still have the
+project's AGENTS.md. A project can register the mod and turn it on for
+everyone who uses Claude Code in its `.claude/settings.json`; Claude Code
+registers the marketplace once you trust the folder, and each person still
+installs the mod once (see [Install](#install)):
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "agent-stage-cc": { "source": { "source": "github", "repo": "Davv7d/agent-stage-cc" } }
+  },
+  "enabledPlugins": { "agent-stage-cc@agent-stage-cc": true }
+}
+```
+
+### A project's rules
+
+Whatever mode is on, and with none, every session is pointed at the project's
+own rules when it starts:
+
+- **The project has an `AGENTS.md`.** The agent is told to read it before it
+  starts on a task, with the skills it points to whenever a task is one they
+  cover, and that its rules come first: where a working mode says otherwise,
+  the project's rules win. Claude Code reads AGENTS.md by itself only where
+  there is no CLAUDE.md; where a CLAUDE.md does not bring it in with an
+  `@AGENTS.md` line, the agent is told to read it.
+- **It has only a `CLAUDE.md`.** Claude Code reads that by itself, and the
+  mod adds nothing.
+- **It has neither.** The agent suggests once, before its first task, that
+  you set the project up with `/stage agent init`, and a toast says the same
+  once a session. Either of you can go on without it.
+
+The project is the repository the session starts in, or, outside one, the
+folder it starts in: its rules, its own modes and its `.agent-stage-cc.json`
+are read there too. `"projectRules": false` in your config turns this off.
+
 ### What a mode is and is not
 
 The mod hands the rules to the agent and draws what the agent then does. It
 checks nothing and enforces nothing: a mode is an instruction, as `CLAUDE.md`
-is, and how closely it is followed is up to the model. A project's mode file
-is read only when you turn that mode on. The rules reach the agent with your
-next message, and they head every new thread of the session while the mode is
-on.
+is, it gives way to the project's AGENTS.md, and how closely it is followed
+is up to the model. A project's mode file
+is read only when you turn that mode on, or when the project names it as its
+default. The rules reach the agent with your next message, and they head
+every new thread of the session while the mode is on.
 
-## Two scenes
+## Three scenes
 
-The pane shows one of two scenes, drawn from the same parts.
+The pane shows one of three scenes, drawn from the same parts.
 
 - **The team**: every agent in its zone. Agents keep a fixed place and glide
   between zones as their state changes. An agent that keeps a task list shows
-  its progress, such as `3/7`, beside it.
+  its progress, such as `3/7`, beside it. An agent that has subagents at work
+  has them beside it as small satellites, four drawn and the rest counted:
+  hollow while one reads or searches, with a spark for each search in flight,
+  solid while it edits, light while it runs tests, dashed before its first
+  call. Its hover card says what
+  the first few are for and what each did last.
 - **A plan**: one agent on the left and its steps in three zones. The step in
   progress is joined to the agent by a line that sparks while the agent
   works, faster for tests than for reading. Finished steps move to the right.
+- **Research**: one agent in the middle and the subagents it sent out on an
+  orbit round it, each labelled with its question. Every search or read in
+  flight throws a spark from the ball that runs it, so you see how many run at
+  once. A shelf collects the sources, one tile per domain or document. The
+  ones read, where something was found, stand first and are marked, a dot
+  for a web page and a square for a document of yours; the ones only found
+  among search results follow, the most often found first, and the caption
+  counts both. Pointing at a tile shows its exact address, or a document's
+  path and the pages read, so you can find it yourself. A line beneath shows
+  how many searches ran at once over the last ten minutes, with the peak
+  marked, and a counter says it in words:
+  `in flight: 5 searches · 3 probes · 27 sources`.
+
+![One agent researching a topic: its subagents, the searches in flight and the sources found, demo data](docs/research.gif)
 
 The steps are the task list the agent already keeps: `TodoWrite`,
 `TaskCreate` and `TaskUpdate`, or the list tool of the app it runs in. The mod
 reads the calls and asks nothing more of the agent; an agent that keeps no
 list has no plan to show.
 
-Left on `auto`, the pane shows a plan when exactly one agent is in play (not
-asleep, not merged) and keeps a list, and the team otherwise. The switch in
-the pane, `/stage view`, or `"view"` in your config holds it to one scene.
+The research is read off the calls too. A subagent the session starts is a
+probe, named by the description its Agent call gave it, and it is finished
+when its own turn ends. A search is `WebSearch`, `WebFetch`, `Read`, `Grep`,
+`Glob`, a read-only shell command, or a connected server's tool whose name
+says search or fetch. The sources are the pages fetched and the links
+searches return, by domain, each with its exact address (the page read
+before one only found), and the documents read from disk (PDF, Word,
+Markdown, text and the like, not code), each with its path and the pages
+read. A record keeps 60; past that, a source read takes the place of the one
+only found least often. The record is kept once the session starts a
+subagent or its pane shows the research scene, held to it or left to a mode
+watched on it. A new prompt starts it anew where no plan under way carries it
+and nothing of it still runs. What runs is cleared when a turn ends, when it
+is broken off and when the session ends, so no count stays behind; with many
+searches at once the agent's file is written at most once a second.
+
+Left on `auto`, the pane shows research when exactly one agent is in play
+(not asleep, not merged) and it is in the `research` mode or has a subagent
+out; a plan when exactly one agent is in play and keeps a list; and the team
+otherwise. The switch in the pane, `/stage view`, or `"view"` in your config
+holds it to one scene.
 
 There is no setting for working step by step or in one run: the scene shows
 what happens. An agent that stops between steps leaves the finished step at a
@@ -176,8 +326,11 @@ gate, marked as waiting for you; an agent that runs on never shows the gate.
 
 Each session that has the mod records what its agent is doing in a small file
 shared by every worktree of the repository, and every session draws the stage
-from those files. One agent is one worktree; its name and its color follow
-the worktree folder's name.
+from those files. One agent is one worktree, and its color follows the
+worktree folder's name. Its name on the stage is its session's title, as the
+app lists the session, cut at the end so that its beginning tells it from the
+others; a session without a title goes by the folder's name. The hover card
+names the folder under the title.
 
 | State | When |
 | --- | --- |
@@ -190,6 +343,12 @@ the worktree folder's name.
 | `queue` | The agent waits for the shared resource |
 | `pr` | `gh pr create` answered with a pull request's address |
 | `done` | The pull request merged; the agent then leaves the stage |
+
+A subagent's calls move its agent's state while the agent's own turn runs.
+Once the agent rests, a subagent working on in the background shows only as
+its satellite and leaves the agent's state alone, unless it opens or merges
+a pull request; its calls are never the agent's last action. A call broken
+off, as when you stop a test run, is not a failed one.
 
 Pink always means a question for you, red an error, amber something worth a
 look. A session becomes the **coordinator** the first time it hands work to
@@ -223,10 +382,10 @@ Without a resource the scene simply has no ring.
 | Command | What it does |
 | --- | --- |
 | `/stage` | Open the pane |
-| `/stage agent` | List the working modes and say which is on |
+| `/stage agent` | List the working modes, say which is on and which is the project's default |
 | `/stage agent <mode>`, `/stage agent off` | Turn a working mode on for this session, or off |
-| `/stage view auto`, `team`, `plan` | Choose the scene; `auto` picks by who is at work |
-| `/stage demo`, `/stage demo plan`, `/stage live` | An invented team, an invented plan, or real data |
+| `/stage view auto`, `team`, `plan`, `research` | Choose the scene; `auto` picks by who is at work |
+| `/stage demo`, `/stage demo plan`, `/stage demo research`, `/stage live` | An invented team, plan or research, or real data |
 | `/stage band` | Hide or show the row above the prompt |
 | `/stage status` | The stage as text |
 | `/stage grant <agent>` | Give the shared resource to an agent |
@@ -235,7 +394,8 @@ Without a resource the scene simply has no ring.
 | `/stage order <agent> <agent> ...` | Put the waiting line in this order |
 | `/stage scope <container> ...` | Say which containers are in scope |
 
-`<agent>` is a worktree name or a distinctive part of one.
+`<agent>` is a worktree name or a distinctive part of one, not the session
+title the stage shows; the hover card names the worktree.
 
 ## Configuration
 
@@ -247,6 +407,7 @@ Everything is optional.
 {
   "band": true,
   "guide": true,
+  "projectRules": true,
   "view": "auto",
   "language": "auto",
   "notify": { "question": true, "failed": true, "released": true, "pr": false },
@@ -255,10 +416,12 @@ Everything is optional.
 }
 ```
 
-**A project's**, in `.agent-stage-cc.json` at the root of the repository:
+**A project's**, in `.agent-stage-cc.json` at the root of the repository, or
+of the folder the session starts in outside one:
 
 ```json
 {
+  "mode": "plan",
   "testCommands": ["\\./scripts/run-checks\\.sh\\b"],
   "coordinatorTools": ["^delegate_task$"]
 }
@@ -266,8 +429,10 @@ Everything is optional.
 
 Both lists are regular expressions. `testCommands` replaces the built-in
 recognition of common test runners; `coordinatorTools` names the tools that
-hand work to another agent. Nothing about any particular project lives in the
-mod itself.
+hand work to another agent. `mode` names the working mode every session in
+the project starts with; see
+[A project's default mode](#a-projects-default-mode).
+Nothing about any particular project lives in the mod itself.
 
 The scene speaks English or Polish. It follows your system: the locale in the
 session's environment and, where an app has none, the language macOS or
@@ -279,8 +444,9 @@ outright. Replies to `/stage` commands are in English.
 In `<git common dir>/agent-stage-cc/`, which every worktree of a repository
 shares and git never commits: one file per agent in `agents/`, one per shared
 resource in `resources/`, and the latest usage measurement. Files of worktrees
-that no longer exist are removed. Outside a git repository the mod does
-nothing.
+that no longer exist are removed. Outside a git repository there is no shared
+state and the stage has nothing to draw, but the project's rules, its modes
+and its settings are read in the folder the session starts in.
 
 CPU and memory are shown twice. The whole machine is what the system itself
 counts: `/proc/stat` and `/proc/meminfo` on Linux, `ps` and `vm_stat` on
@@ -295,9 +461,16 @@ Early, and built against an early-access plugin API that may change.
 - Developed and used on the Claude Code desktop app on Linux.
 - The macOS probes for CPU, memory and language are written and unit-tested
   but have not run on a Mac yet. Windows is not supported, except under WSL.
-- Working modes are instructions to the model. They have been tested for how
-  they are delivered and drawn, not for how faithfully each model follows
-  them.
+- Working modes and the project-rules section are instructions to the model.
+  They have been tested for how they are delivered and drawn, not for how
+  faithfully each model follows them; `init` has not yet set up a real
+  project.
+- Session titles have been seen arriving in a live desktop session; the
+  subagent satellites have been checked with demo data and tests.
+- The scene needs a git repository. Outside one, the rules, modes and
+  settings work, but there is nothing to draw.
+- The research scene has been checked with demo data and tests, not yet over
+  a long research in a real session.
 - In the desktop app a notification is a toast inside the coordinator's
   session, not a system notification.
 - One skin, Neon. More skins, and skins from your own sprite sheets, are

@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import type { AgentRecord } from '../types'
 import type { Action, ActionKind } from '../hooks/core/derive'
-import { newRecord, toSnapshot } from '../hooks/core/model'
+import { mend, newRecord, toSnapshot } from '../hooks/core/model'
 import { apply } from '../hooks/core/reduce'
 import type { StageEvent } from '../hooks/core/reduce'
 
@@ -118,4 +118,37 @@ test('a merge or a close on the forge reaches the agent', async () => {
   // An agent already back at work stays at work.
   expect(run(open, [start('coding', 2500), { kind: 'pr-state', at: 3000, state: 'closed' }]).state).toBe('coding')
   expect(run(fresh(), [{ kind: 'pr-state', at: 3000, state: 'merged' }]).state).toBe('idle')
+})
+
+test('the session title names the agent, until another session takes the worktree', async () => {
+  const title = (at: number, text: string): StageEvent => ({ kind: 'title', at, title: text })
+  let rec = run(fresh(), [title(2000, '  Billing:   CSV export  ')])
+  expect(rec.title).toBe('Billing: CSV export')
+  // A rename follows; an empty title is none.
+  rec = run(rec, [title(2100, 'Billing: CSV export for accountants')])
+  expect(rec.title).toBe('Billing: CSV export for accountants')
+  expect(run(rec, [title(2200, '   ')]).title).toBe(undefined)
+  expect(run(rec, [title(2200, 'x'.repeat(500))]).title?.length).toBe(120)
+  // The same session starting again keeps it; another session in the worktree does not.
+  expect(run(rec, [{ kind: 'session-start', at: 3000, sessionId: 's1' }]).title).toBe('Billing: CSV export for accountants')
+  expect(run(rec, [{ kind: 'session-start', at: 3000, sessionId: 's2' }]).title).toBe(undefined)
+  // A title that is not text is not read back from the file.
+  expect(mend({ ...rec, title: 42 } as unknown as AgentRecord).title).toBe(undefined)
+  expect(mend(rec).title).toBe('Billing: CSV export for accountants')
+})
+
+test("a subagent's calls move the agent while its turn runs, not once it rests, and never take its last action", async () => {
+  const sub = (kind: ActionKind, at: number, label: string = kind): StageEvent => ({ kind: 'tool-start', at, action: { kind, label }, loop: 'p1' })
+  const working = run(fresh(), [{ kind: 'turn-start', at: 2000 }, start('research', 2100)])
+  // Its turn runs: a subagent's edit shows as the agent's work, but the agent's last action stays its own.
+  const moved = run(working, [sub('coding', 2200, 'Edit x.ts')])
+  expect(moved.state).toBe('coding')
+  expect(moved.lastAction).toBe('research')
+  // At rest after its turn, a subagent in the background leaves it resting.
+  const resting = run(working, [turnEnd(3000, 'Done.')])
+  expect(resting.state).toBe('idle')
+  expect(run(resting, [sub('coding', 3100), sub('test', 3200), { kind: 'tool-end', at: 3300, action: act('test'), isError: true, loop: 'p1' }]).state).toBe('idle')
+  // Unless it opens a pull request: that is the agent's.
+  const opened = run(resting, [sub('pr-create', 3400), { kind: 'tool-end', at: 3500, action: act('pr-create'), isError: false, output: 'https://example.com/o/r/pull/7', loop: 'p1' }])
+  expect([opened.state, opened.pr?.url]).toEqual(['pr', 'https://example.com/o/r/pull/7'])
 })

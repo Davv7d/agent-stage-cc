@@ -18,6 +18,8 @@ export type Layout = {
   meters: Point
   /** Characters of an agent's name that fit under its ball. */
   nameMax: number
+  /** The same in the PR zone, where agents may stand closer side by side. */
+  prNameMax: number
   /** How large an agent is drawn. */
   scale: number
 }
@@ -88,6 +90,8 @@ function wide(width: number, height: number, hasRing: boolean): Layout | undefin
     hudBottom: [24, height - 20],
     meters: [width - 24 - METERS_WIDTH, height - 20],
     nameMax: namesIn(columnGap),
+    // The PR zone is a column with room on both sides of each name.
+    prNameMax: namesIn(columnGap),
     scale: 0.76,
   }
 }
@@ -137,6 +141,8 @@ function narrow(width: number, height: number, hasRing: boolean): Layout | undef
     hudBottom: [16, height - 16],
     meters: [16, height - 34],
     nameMax: namesIn(columnGap),
+    // The PR zone is a row of five: a name must leave room for the next one's.
+    prNameMax: clamp(Math.floor(prGap / 6.6), 8, namesIn(columnGap)),
     scale: 0.76,
   }
 }
@@ -295,6 +301,149 @@ export function fitPlan(bodyColumns: number, bodyRows: number, hasRing = false):
     if (layout !== undefined) return { layout, pixelWidth, pixelHeight }
   }
   const least = planNarrow(480, 760) as PlanLayout
+
+  return { layout: least, pixelWidth, pixelHeight: Math.round((pixelWidth * least.height) / least.width) }
+}
+
+/** One source's tile on the shelf. */
+export type Tile = { width: number; height: number; gap: number }
+
+/**
+ * Where the parts of one agent's research sit: the agent in the middle, its
+ * probes on an orbit round it, the shelf of sources, and the line of how
+ * many searches ran at once.
+ */
+export type ResearchLayout = {
+  kind: 'wide' | 'narrow'
+  width: number
+  height: number
+  /** The agent, at the middle of the orbit. */
+  center: Point
+  /** Half the orbit's width, and half its height. */
+  orbit: { rx: number; ry: number }
+  /** Where the probe in a place of the orbit stands, counted from 0. */
+  probe: (place: number) => Point
+  /** The shelf's top left corner, and how many tiles fit it. */
+  shelf: { x: number; y: number; columns: number; rows: number; tile: Tile }
+  /** The box the sparkline is drawn in. */
+  spark: { x: number; y: number; width: number; height: number }
+  captions: { shelf: Point; spark: Point }
+  hudTop: Point
+  /** The line of what runs now, and which way its text runs from there. */
+  counter: { at: Point; anchor: 'start' | 'end' }
+  hudBottom: Point
+  meters: Point
+  /** Characters per line of a probe's label, and of a domain on a tile. */
+  nameMax: number
+  tileMax: number
+  scale: number
+}
+
+/** Places on the orbit; the stage seats probes into the same count. */
+export const ORBIT_PLACES = 8
+/** The orbit's places in the order they fill, so a few probes spread out; none is straight above or below the agent. */
+const ORBIT_ORDER = [0, 4, 2, 6, 3, 7, 1, 5]
+/** How far a probe's three lines of text reach beyond its ball's middle, up or down. */
+export const LABEL_REACH = 50
+/** Width of one character of the scene's small type, with room for a wider fallback font. */
+const CHAR = 6
+
+const onOrbit = (center: Point, rx: number, ry: number) => (place: number): Point => {
+  const degrees = -67.5 + (ORBIT_ORDER[((place % ORBIT_PLACES) + ORBIT_PLACES) % ORBIT_PLACES] ?? 0) * 45
+  const angle = (degrees * Math.PI) / 180
+
+  return [Math.round(center[0] + rx * Math.cos(angle)), Math.round(center[1] + ry * Math.sin(angle))]
+}
+
+/** The orbit's sides lie at cos 22.5° of its width from the middle, its top and bottom at that much of its height. */
+const SIDE = Math.cos(Math.PI / 8)
+
+/** Left to right: the agent and its orbit, then the shelf; the sparkline beneath. */
+function researchWide(width: number, height: number): ResearchLayout | undefined {
+  if (width < 880 || height < 500) return undefined
+  const base: Tile = { width: 116, height: 20, gap: 8 }
+  const columns = clamp(Math.floor((width * 0.3 + base.gap) / (base.width + base.gap)), 2, 4)
+  const shelfX = width - 24 - (columns * (base.width + base.gap) - base.gap)
+  const [left, right, top, bottom] = [24, shelfX - 36, 64, height - 112]
+  const reach = (24 * CHAR) / 2 + 4
+  const center: Point = [Math.round((left + right) / 2), Math.round((top + bottom) / 2)]
+  const ry = clamp(((bottom - top) / 2 - LABEL_REACH) / SIDE, 100, 230)
+  const rx = Math.round(clamp(Math.min(ry * 1.5, ((right - left) / 2 - reach) / SIDE), ry * 0.9, 340))
+  // The two probes at the top, and the two at the bottom, have room for both their names.
+  const nameMax = clamp(Math.floor((2 * Math.sin(Math.PI / 8) * rx - 8) / CHAR), 12, 24)
+  const shelfY = 92
+
+  return {
+    kind: 'wide',
+    width,
+    height,
+    center,
+    orbit: { rx, ry: Math.round(ry) },
+    probe: onOrbit(center, rx, Math.round(ry)),
+    shelf: { x: shelfX, y: shelfY, columns, rows: Math.max(1, Math.floor((height - 48 - shelfY + base.gap) / (base.height + base.gap))), tile: base },
+    spark: { x: 24, y: height - 82, width: Math.min(440, right - left), height: 34 },
+    captions: { shelf: [shelfX, 78], spark: [24, height - 92] },
+    hudTop: [24, 36],
+    counter: { at: [width - 24, 36], anchor: 'end' },
+    hudBottom: [24, height - 20],
+    meters: [width - 24 - METERS_WIDTH, height - 20],
+    nameMax,
+    tileMax: Math.floor((base.width - 14) / CHAR),
+    scale: 0.76,
+  }
+}
+
+/** Top to bottom for a docked pane: the orbit, the sparkline, the shelf. */
+function researchNarrow(width: number, height: number): ResearchLayout | undefined {
+  if (width < 400 || height < 700) return undefined
+  const wanted = clamp(Math.floor((width - 40) / 22), 14, 26)
+  const rx = Math.round(clamp((width / 2 - 14 - (wanted * CHAR) / 2) / SIDE, 110, 280))
+  const nameMax = Math.min(wanted, Math.floor((2 * Math.sin(Math.PI / 8) * rx - 8) / CHAR))
+  // The orbit leaves the shelf room for four rows of sources at least.
+  const ry = Math.round(clamp(Math.min(rx * 0.82, (height - 440) / (2 * SIDE)), 100, 210))
+  const center: Point = [Math.round(width / 2), Math.round(60 + LABEL_REACH + SIDE * ry)]
+  const sparkY = Math.round(center[1] + SIDE * ry + LABEL_REACH + 30)
+  const gap = 8
+  const columns = clamp(Math.floor((width - 32 + gap) / (116 + gap)), 2, 6)
+  const tile: Tile = { width: Math.floor((width - 32 - (columns - 1) * gap) / columns), height: 20, gap }
+  const shelfY = sparkY + 34 + 40
+  const rows = Math.floor((height - 64 - shelfY + gap) / (tile.height + gap))
+  if (rows < 2) return undefined
+
+  return {
+    kind: 'narrow',
+    width,
+    height,
+    center,
+    orbit: { rx, ry },
+    probe: onOrbit(center, rx, ry),
+    shelf: { x: 16, y: shelfY, columns, rows, tile },
+    spark: { x: 16, y: sparkY, width: width - 32, height: 34 },
+    captions: { shelf: [16, shelfY - 12], spark: [16, sparkY - 10] },
+    hudTop: [16, 28],
+    counter: { at: [16, 46], anchor: 'start' },
+    hudBottom: [16, height - 16],
+    meters: [16, height - 34],
+    nameMax,
+    tileMax: Math.floor((tile.width - 14) / CHAR),
+    scale: 0.76,
+  }
+}
+
+export type ResearchFit = { layout: ResearchLayout; pixelWidth: number; pixelHeight: number }
+
+/** The research's layout for a pane of this many columns and rows, as `fitLayout` finds the team's. */
+export function fitResearch(bodyColumns: number, bodyRows: number): ResearchFit {
+  const pixelWidth = Math.max(240, Math.floor(bodyColumns * COLUMN_PIXELS))
+  const pixelHeight = Math.max(240, Math.floor(bodyRows * ROW_PIXELS) - CHROME_PIXELS)
+  const isWide = pixelWidth >= pixelHeight * 1.2
+  for (const zoom of ZOOMS) {
+    const width = Math.round(pixelWidth / zoom)
+    const height = Math.round(pixelHeight / zoom)
+    const layout = isWide ? (researchWide(width, height) ?? researchNarrow(width, height)) : (researchNarrow(width, height) ?? researchWide(width, height))
+    if (layout !== undefined) return { layout, pixelWidth, pixelHeight }
+  }
+  const least = researchNarrow(480, 820) as ResearchLayout
 
   return { layout: least, pixelWidth, pixelHeight: Math.round((pixelWidth * least.height) / least.width) }
 }
