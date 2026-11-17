@@ -1,7 +1,7 @@
 {
   "name": "agent-stage-cc",
   "version": "0.0.3",
-  "description": "A live stage for agent work: one agent's plan or a whole team in worktrees, working modes you turn on per session, and who is waiting on you",
+  "description": "A live stage for agent work: one agent's plan or research, or a whole team in worktrees; working modes per session; a project's AGENTS.md read first, and an init that writes it for any assistant",
   "license": "MIT",
   "types": "./types/index.d.ts"
 }

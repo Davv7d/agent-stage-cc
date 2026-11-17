@@ -1,5 +1,6 @@
 {
   "name": "agent-stage-cc",
   "owner": { "name": "agent-stage-cc contributors" },
+  "description": "agent-stage-cc: a live stage for agent work in Claude Code, and working modes that put a project's AGENTS.md first",
   "plugins": [{ "name": "agent-stage-cc", "source": "./" }]
 }
