@@ -109,3 +109,18 @@ test("every mode tells the agent that the project's own rules come first", async
   for (const mode of BUILT_IN) expect(modeBrief(mode)).toContain("The project's own rules, in its AGENTS.md where it has one, come first")
   expect(builtIn('research').text).toContain('its AGENTS.md and the skills it points to')
 })
+
+test("init speaks the person's language, asks which one the files are written in, and follows rules already there", async () => {
+  const text = builtIn('init').text
+  expect(text).toContain('Speak with the person in the language they write in')
+  expect(text).toContain('Ask too which language AGENTS.md and the skills should be written in: the language of this conversation, or another, such as English')
+  // Asked in the first phase, before any detailed question.
+  expect(text.indexOf('which language AGENTS.md')).toBeLessThan(text.indexOf('**Look around.**'))
+  // An AGENTS.md that is there already is followed from the start, and built on.
+  expect(text).toContain('in an AGENTS.md above all, read them all first and follow them from then on')
+  expect(text).toContain('builds on them instead of replacing them')
+})
+
+test('every mode speaks the language the person writes in', async () => {
+  for (const mode of BUILT_IN) expect(modeBrief(mode)).toContain('Speak with the person in the language they write in')
+})

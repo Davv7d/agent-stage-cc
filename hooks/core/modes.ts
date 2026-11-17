@@ -161,7 +161,7 @@ export const modeBrief = (mode: Mode, isProjectDefault = false) =>
 
 ${isProjectDefault
     ? `This project starts every session in the working mode \`${mode.name}\` (its \`.agent-stage-cc.json\` says so), and this session is in it; the person can end it with \`/stage agent off\`.`
-    : `The person turned on the working mode \`${mode.name}\` for this session.`} From now on work by the rules below, until the person says otherwise. They say how to keep your task list: the Agent Stage draws it for the person as you go. The project's own rules, in its AGENTS.md where it has one, come first: where they and this mode differ, follow the project's.
+    : `The person turned on the working mode \`${mode.name}\` for this session.`} From now on work by the rules below, until the person says otherwise. They say how to keep your task list: the Agent Stage draws it for the person as you go. The project's own rules, in its AGENTS.md where it has one, come first: where they and this mode differ, follow the project's. Speak with the person in the language they write in, whatever language these rules are written in.
 
 ${mode.text}`
 

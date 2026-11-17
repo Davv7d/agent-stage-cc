@@ -129,8 +129,10 @@ it, so one command is enough. `/stage agent` lists the modes on offer, and
 - **`init`**: set the project up for any agent, so that everyone who works
   in it, on any machine and with any assistant, starts ready. The agent first
   asks what the project is for (software, writing, research, data or anything
-  else) and fits its questions to the answer. It reads what the folder already
-  holds, asks whether the project has a repository the setup belongs in (and
+  else) and which language the files should be written in, and fits its
+  questions to the answers; it speaks your language throughout. It reads what the folder already
+  holds, follows the rules of an AGENTS.md that is there already and builds
+  on it, asks whether the project has a repository the setup belongs in (and
   clones it where it is elsewhere), then asks what this kind of work needs and
   how work is done here. It sums that up in a few lines with the files it
   would write, asks whether that is everything, and waits. Once you agree it
