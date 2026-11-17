@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import type { AgentRecord } from '../types'
 import type { Action, ActionKind } from '../hooks/core/derive'
-import { newRecord, toSnapshot } from '../hooks/core/model'
+import { mend, newRecord, toSnapshot } from '../hooks/core/model'
 import { apply } from '../hooks/core/reduce'
 import type { StageEvent } from '../hooks/core/reduce'
 
@@ -118,4 +118,21 @@ test('a merge or a close on the forge reaches the agent', async () => {
   // An agent already back at work stays at work.
   expect(run(open, [start('coding', 2500), { kind: 'pr-state', at: 3000, state: 'closed' }]).state).toBe('coding')
   expect(run(fresh(), [{ kind: 'pr-state', at: 3000, state: 'merged' }]).state).toBe('idle')
+})
+
+test('the session title names the agent, until another session takes the worktree', async () => {
+  const title = (at: number, text: string): StageEvent => ({ kind: 'title', at, title: text })
+  let rec = run(fresh(), [title(2000, '  Billing:   CSV export  ')])
+  expect(rec.title).toBe('Billing: CSV export')
+  // A rename follows; an empty title is none.
+  rec = run(rec, [title(2100, 'Billing: CSV export for accountants')])
+  expect(rec.title).toBe('Billing: CSV export for accountants')
+  expect(run(rec, [title(2200, '   ')]).title).toBe(undefined)
+  expect(run(rec, [title(2200, 'x'.repeat(500))]).title?.length).toBe(120)
+  // The same session starting again keeps it; another session in the worktree does not.
+  expect(run(rec, [{ kind: 'session-start', at: 3000, sessionId: 's1' }]).title).toBe('Billing: CSV export for accountants')
+  expect(run(rec, [{ kind: 'session-start', at: 3000, sessionId: 's2' }]).title).toBe(undefined)
+  // A title that is not text is not read back from the file.
+  expect(mend({ ...rec, title: 42 } as unknown as AgentRecord).title).toBe(undefined)
+  expect(mend(rec).title).toBe('Billing: CSV export for accountants')
 })

@@ -1,4 +1,4 @@
-import type { ConcurrencySample, ProbeStatus, Research, ResearchProbe, ResearchSource } from '../../types'
+import type { ConcurrencySample, ProbeStatus, ProbeWork, Research, ResearchProbe, ResearchSource } from '../../types'
 import type { Action } from './derive'
 
 // A session's research, read off what it does: the subagents it starts, the
@@ -182,6 +182,21 @@ export function probeEnded(r: Research, at: number, id: string, reason: string):
   return leveled(r, withProbe(r, { ...was, status: STATUS[reason] ?? 'failed', inFlight: 0, endedAt: at }), at)
 }
 
+const WORK: Partial<Record<Action['kind'], ProbeWork>> = { research: 'research', coding: 'coding', test: 'testing' }
+
+/**
+ * A probe made a call: what it does now, read off the call as the stage
+ * reads the agent's own. A call that is none of the three leaves what it did.
+ */
+export function probeActed(r: Research, id: string, action: Action): Research {
+  const was = r.probes.find(p => p.id === id)
+  if (was === undefined) return r
+  const doing = WORK[action.kind] ?? was.doing
+  const lastAction = clean(action.label)
+
+  return withProbe(r, { ...was, ...(doing === undefined ? {} : { doing }), ...(lastAction === '' ? {} : { lastAction }) })
+}
+
 /** A search or read began, in the session's own loop or in a probe's; a loop no spawn sent out is not the research's. */
 export function callStarted(r: Research, at: number, loop?: string): Research {
   const counted = { ...r, calls: r.calls + 1 }
@@ -260,12 +275,14 @@ export function seriesOf(r: Research, now: number): { series: number[]; peakInde
 
 const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 const PROBE_STATUS = new Set<unknown>(['running', 'done', 'stopped', 'failed'])
+const WORKS = new Set<unknown>(['research', 'coding', 'testing'])
 
 function isProbe(value: unknown): value is ResearchProbe {
   const p = record(value)
 
   return typeof p.id === 'string' && typeof p.label === 'string' && PROBE_STATUS.has(p.status) &&
-    isNumber(p.inFlight) && isNumber(p.calls) && isNumber(p.startedAt)
+    isNumber(p.inFlight) && isNumber(p.calls) && isNumber(p.startedAt) &&
+    (p.doing === undefined || WORKS.has(p.doing)) && (p.lastAction === undefined || typeof p.lastAction === 'string')
 }
 
 const isSource = (value: unknown): value is ResearchSource =>

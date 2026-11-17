@@ -51,7 +51,7 @@ import { neon } from './scene/neon'
 import { renderPlan } from './scene/plan'
 import { renderResearch, researchRows } from './scene/research'
 import { ASK, BAD, WARN } from './scene/skin'
-import { describeScene, MAX_SOURCE, renderScene } from './scene/scene'
+import { describeScene, MAX_SOURCE, nameOf, renderScene } from './scene/scene'
 import { advance } from './scene/stage'
 
 const PANE = 'agent-stage'
@@ -149,6 +149,8 @@ type Self = {
   writtenAt: number
   /** The research as last written, and whether a write of a later one is due. */
   researchWritten: string
+  /** The session's title as the app last gave it. */
+  title: string | undefined
   isFlushDue: boolean
   /** A save is under way, and the record changed again meanwhile. */
   isSaving: boolean
@@ -318,6 +320,13 @@ function flushLater($: EngineInterface, self: Self): void {
   if (self.isFlushDue) return
   self.isFlushDue = true
   $.clock.after(RESEARCH_WRITE_MS, () => void flush($, self))
+}
+
+/** The session's title as the app gave it now, kept in the record when it is new. */
+async function titled($: EngineInterface, self: Self, title: unknown): Promise<void> {
+  if (typeof title !== 'string' || title === self.title) return
+  self.title = title
+  await emit($, self, at => ({ kind: 'title', at, title }))
 }
 
 /** Writes what of the research is not written yet. */
@@ -655,7 +664,7 @@ async function resourceAction(
 export const register: Register = on => {
   const self: Self = {
     who: undefined, rec: undefined, written: '', writtenAt: 0, isLocated: false,
-    researchWritten: 'null', isFlushDue: false, isSaving: false, isDirty: false,
+    researchWritten: 'null', title: undefined, isFlushDue: false, isSaving: false, isDirty: false,
     shown: '', stage: null, polls: 0, isDemo: false, demoKind: 'team', mode: null, isModeDefault: false, projectMode: undefined, lang: 'en', systemLang: 'en', utcOffsetMinutes: 0,
     pane: '', paneWritten: '', images: null, config: DEFAULTS, patterns: DEFAULT_PATTERNS, last: null, briefShown: '',
     machine: undefined, cpuSeconds: null, system: null, sampledAt: 0, containers: {}, usage: null, limits: [], sessionId: '', trouble: '',
@@ -681,11 +690,28 @@ export const register: Register = on => {
     const sessionId = await $.session.id()
     await emit($, self, at => ({ kind: 'session-start', at, sessionId }))
     await startMode($, self, e.isInteractive)
+    // A title heard before the session's start was the session's own: the start set the record anew.
+    if (self.title !== undefined) {
+      const title = self.title
+      await emit($, self, at => ({ kind: 'title', at, title }))
+    }
     void refresh($, self)
     $.clock.every(self.config.refreshMs, () => void refresh($, self))
 
     return next(e)
   })
+
+  // The session's title, as the app lists the session: the stage names the agent by it.
+  on('classic.SessionStart', async ($, e, next) => {
+    await titled($, self, e.session_title)
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    await titled($, self, e.session_title)
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   // How to keep the stage's record, told once in each session's instructions.
   on('prompt.compose', async ($, e, next) => {
@@ -860,7 +886,8 @@ export const register: Register = on => {
         ))}
         {[...(stage.coordinator === null ? [] : [stage.coordinator]), ...stage.agents].map(a => (
           <Text color={a.needsAttention ? '#ff5fa2' : undefined} dimColor={a.isAsleep}>
-            {a.id} · {a.isAsleep ? words.asleep : words.state[a.state]}
+            {nameOf(a, 60)} · {a.isAsleep ? words.asleep : words.state[a.state]}
+            {(a.subagents?.length ?? 0) === 0 ? '' : ` · ${words.subagents(a.subagents?.length ?? 0)}`}
             {a.lastAction === '' ? '' : ` · ${a.lastAction}`}
           </Text>
         ))}

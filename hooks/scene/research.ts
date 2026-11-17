@@ -3,7 +3,7 @@ import type { ProbeStatus, ResearchScene, SceneProbe, Stage } from '../../types'
 import { WORDS } from './labels'
 import type { Lang } from './labels'
 import type { Point, ResearchLayout } from './layout'
-import { card, esc, frame, gauges, meters, move, n1, shorten } from './scene'
+import { card, esc, frame, gauges, meters, move, n1, nameOf, shorten } from './scene'
 import type { SceneOptions } from './scene'
 import { ASK, BAD, colorOf } from './skin'
 import type { Skin } from './skin'
@@ -222,7 +222,7 @@ export function renderResearch(stage: Stage, scene: ResearchScene, layout: Resea
   const more = scene.more > 0 ? `<text y="${o.labels ? 104 : 92}" class="t st" text-anchor="middle">${esc(w.more(scene.more))}</text>` : ''
   const reach = Math.round(Math.min(layout.orbit.rx, layout.orbit.ry) * 0.55)
   const own = agent.isAsleep ? '' : sparks(AGENT_ANGLES.slice(0, Math.min(scene.inFlight, AGENT_SPARKS)), 40, reach, color, 1.4)
-  const lead = `<g transform="translate(${cx},${cy})"${isDim ? ' opacity=".4"' : ''}>${own}${mode}${more}<g><circle r="38" fill="none" stroke="${QUIET}" stroke-width="1.5" stroke-dasharray="3 7"/><animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="30s" repeatCount="indefinite"/></g>${gauges(levels?.agents[agent.id], color, o.labels ? 97 : 84, 30)}<g transform="scale(1.12)">${skin.glyph(agent, { color })}</g><text y="62" class="t nm" text-anchor="middle" fill="${color}">${esc(shorten(agent.id, 22))}</text>${label}</g>`
+  const lead = `<g transform="translate(${cx},${cy})"${isDim ? ' opacity=".4"' : ''}>${own}${mode}${more}<g><circle r="38" fill="none" stroke="${QUIET}" stroke-width="1.5" stroke-dasharray="3 7"/><animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="30s" repeatCount="indefinite"/></g>${gauges(levels?.agents[agent.id], color, o.labels ? 97 : 84, 30)}<g transform="scale(1.12)">${skin.glyph(agent, { color })}</g><text y="62" class="t nm" text-anchor="middle" fill="${color}">${esc(nameOf(agent, 22))}</text>${label}</g>`
   tips += `<g class="hit"><circle cx="${cx}" cy="${cy}" r="30" fill="#000" fill-opacity="0"/>${card(agent, layout.center, layout, o, levels?.cores ?? 1)}</g>`
 
   const plan = agent.plan ?? []

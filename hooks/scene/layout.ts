@@ -18,6 +18,8 @@ export type Layout = {
   meters: Point
   /** Characters of an agent's name that fit under its ball. */
   nameMax: number
+  /** The same in the PR zone, where agents may stand closer side by side. */
+  prNameMax: number
   /** How large an agent is drawn. */
   scale: number
 }
@@ -88,6 +90,8 @@ function wide(width: number, height: number, hasRing: boolean): Layout | undefin
     hudBottom: [24, height - 20],
     meters: [width - 24 - METERS_WIDTH, height - 20],
     nameMax: namesIn(columnGap),
+    // The PR zone is a column with room on both sides of each name.
+    prNameMax: namesIn(columnGap),
     scale: 0.76,
   }
 }
@@ -137,6 +141,8 @@ function narrow(width: number, height: number, hasRing: boolean): Layout | undef
     hudBottom: [16, height - 16],
     meters: [16, height - 34],
     nameMax: namesIn(columnGap),
+    // The PR zone is a row of five: a name must leave room for the next one's.
+    prNameMax: clamp(Math.floor(prGap / 6.6), 8, namesIn(columnGap)),
     scale: 0.76,
   }
 }

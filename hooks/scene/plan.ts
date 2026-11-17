@@ -2,7 +2,7 @@ import { progressOf } from '../core/plan'
 import type { PlanScene, SceneStep, Stage, StepPlace } from '../../types'
 import { WORDS } from './labels'
 import type { PlanLayout, Point } from './layout'
-import { card, esc, frame, gauges, meters, move, n1, ring, shorten } from './scene'
+import { card, esc, frame, gauges, meters, move, n1, nameOf, ring, shorten } from './scene'
 import type { SceneOptions } from './scene'
 import { ASK, BAD, colorOf } from './skin'
 import type { Skin } from './skin'
@@ -127,7 +127,7 @@ export function renderPlan(stage: Stage, scene: PlanScene, layout: PlanLayout, s
   const mode = agent.mode === undefined
     ? ''
     : `<text y="${o.labels ? 98 : 85}" class="t st" text-anchor="middle">${esc(`${w.mode}: ${shorten(agent.mode, 18)}`)}</text>`
-  const lead = `<g transform="translate(${ax},${ay})"${isDim ? ' opacity=".4"' : ''}>${mode}<g><circle r="38" fill="none" stroke="${QUIET}" stroke-width="1.5" stroke-dasharray="3 7"/><animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="30s" repeatCount="indefinite"/></g>${gauges(levels?.agents[agent.id], color, o.labels ? 83 : 70, 30)}<g transform="scale(1.12)">${skin.glyph(agent, { color })}</g><text y="62" class="t nm" text-anchor="middle" fill="${color}">${esc(shorten(agent.id, 22))}</text>${label}</g>`
+  const lead = `<g transform="translate(${ax},${ay})"${isDim ? ' opacity=".4"' : ''}>${mode}<g><circle r="38" fill="none" stroke="${QUIET}" stroke-width="1.5" stroke-dasharray="3 7"/><animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="30s" repeatCount="indefinite"/></g>${gauges(levels?.agents[agent.id], color, o.labels ? 83 : 70, 30)}<g transform="scale(1.12)">${skin.glyph(agent, { color })}</g><text y="62" class="t nm" text-anchor="middle" fill="${color}">${esc(nameOf(agent, 22))}</text>${label}</g>`
   tips += `<g class="hit"><circle cx="${ax}" cy="${ay}" r="30" fill="#000" fill-opacity="0"/>${card(agent, layout.agent, layout, o, levels?.cores ?? 1)}</g>`
 
   // The gate shows only while a step stands at it: a run that never stops has none.

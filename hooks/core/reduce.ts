@@ -7,6 +7,7 @@ import {
   callStarted,
   emptyResearch,
   isRunning,
+  probeActed,
   probeEnded,
   probeStarted,
   sessionEnded,
@@ -29,6 +30,8 @@ export type StageEvent =
   | { kind: 'probe-end'; at: number; id: string; reason: 'answer' | 'aborted' | 'refusal' | 'error' }
   /** The session's pane shows its research: keep it from now on. */
   | { kind: 'research-watch'; at: number }
+  /** The session's title, as the app lists the session. */
+  | { kind: 'title'; at: number; title: string }
   /** A call of a tool that keeps the agent's task list, once it succeeded. */
   | { kind: 'plan-call'; at: number; tool: string; input: Readonly<Record<string, unknown>>; result?: unknown }
   /** The person turned a working mode on, or off with null. */
@@ -125,6 +128,9 @@ export function apply(rec: AgentRecord, event: StageEvent): AgentRecord {
   return { ...next, updatedAt: event.at }
 }
 
+/** A title longer than this is cut: the stage shows its beginning only. */
+const MAX_TITLE = 120
+
 /** A record with its research changed, where it keeps any. */
 const researched = (rec: AgentRecord, change: (r: Research) => Research): AgentRecord =>
   rec.research === undefined ? rec : { ...rec, research: change(rec.research) }
@@ -133,8 +139,8 @@ function step(rec: AgentRecord, event: StageEvent): AgentRecord {
   switch (event.kind) {
     case 'session-start': {
       if (event.sessionId === rec.sessionId) return { ...rec, isLive: true }
-      // Another session in the same worktree: the plan, the mode and the research were the last one's.
-      const { plan: _plan, research: _research, ...fresh } = withoutMode(rec)
+      // Another session in the same worktree: the plan, the mode, the research and the title were the last one's.
+      const { plan: _plan, research: _research, title: _title, ...fresh } = withoutMode(rec)
 
       return { ...fresh, sessionId: event.sessionId, isLive: true }
     }
@@ -148,6 +154,12 @@ function step(rec: AgentRecord, event: StageEvent): AgentRecord {
     }
     case 'probe-end':
       return researched(rec, r => probeEnded(r, event.at, event.id, event.reason))
+    case 'title': {
+      const title = event.title.replace(/\s+/g, ' ').trim().slice(0, MAX_TITLE)
+      const { title: _was, ...untitled } = rec
+
+      return title === '' ? untitled : { ...rec, title }
+    }
     case 'research-watch':
       return rec.research === undefined ? { ...rec, research: emptyResearch(event.at) } : rec
     case 'mode': {
@@ -179,7 +191,11 @@ function step(rec: AgentRecord, event: StageEvent): AgentRecord {
     case 'tool-start': {
       const acted = onToolStart(rec, event.at, event.action)
 
-      return event.isSearch === true ? researched(acted, r => callStarted(r, event.at, event.loop)) : acted
+      // A probe's call says what the probe does now.
+      const loop = event.loop
+      const seen = loop === undefined ? acted : researched(acted, r => probeActed(r, loop, event.action))
+
+      return event.isSearch === true ? researched(seen, r => callStarted(r, event.at, loop)) : seen
     }
     case 'tool-end': {
       const ended = onToolEnd(rec, event.at, event.action, event.isError, event.output ?? '')

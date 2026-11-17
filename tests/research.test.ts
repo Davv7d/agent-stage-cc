@@ -50,7 +50,7 @@ test('a spawn starts the research, and a probe counts its own calls', async () =
   expect(research(rec).probes[0]?.calls).toBe(2)
   // Its own turn's end finishes it, and nothing of it is left running.
   rec = run(rec, [{ kind: 'probe-end', at: 3000, id: 'a1', reason: 'answer' }])
-  expect(research(rec).probes[0]).toEqual({ id: 'a1', label: 'How long do cells last?', status: 'done', inFlight: 0, calls: 2, startedAt: 2000, endedAt: 3000 })
+  expect(research(rec).probes[0]).toEqual({ id: 'a1', label: 'How long do cells last?', status: 'done', inFlight: 0, calls: 2, startedAt: 2000, endedAt: 3000, doing: 'research', lastAction: 'WebSearch x' })
   // Stopped and failed are told apart.
   const stopped = run(rec, [spawn(3100, 'a2', 'x'), { kind: 'probe-end', at: 3200, id: 'a2', reason: 'aborted' }])
   expect(research(stopped).probes[1]?.status).toBe('stopped')
@@ -96,7 +96,7 @@ test('only a subagent sent out is a probe: the engine\'s own forks are not', asy
   // A spawned probe, finished and woken again for another turn, runs again under its first name.
   rec = run(rec, [spawn(3000, 'p1', 'First name'), search(3100, 'p1'), found(3200, 'p1'), { kind: 'probe-end', at: 3300, id: 'p1', reason: 'answer' }])
   rec = run(rec, [{ kind: 'probe-start', at: 4000, id: 'p1' }, { kind: 'probe-start', at: 4100, id: 'p1', label: 'Another' }])
-  expect(research(rec).probes).toEqual([{ id: 'p1', label: 'First name', status: 'running', inFlight: 0, calls: 1, startedAt: 3000 }])
+  expect(research(rec).probes).toEqual([{ id: 'p1', label: 'First name', status: 'running', inFlight: 0, calls: 1, startedAt: 3000, doing: 'research', lastAction: 'WebSearch x' }])
 })
 
 test('a record keeps a bounded number of probes, the running ones first', async () => {
@@ -209,4 +209,23 @@ test('research a stored record cannot be read by is left out, a sound one kept a
   const broken = { ...sound, research: { probes: 'many' } } as unknown as AgentRecord
   expect(mend(broken).research).toBe(undefined)
   expect(mend(broken).id).toBe('topic-scan')
+})
+
+test('a probe shows what it does now: reading, editing or testing, and its last call', async () => {
+  const act = (at: number, loop: string, tool: string, input: Record<string, unknown>): StageEvent => ({ kind: 'tool-start', at, action: classify(tool, input), loop })
+  let rec = run(fresh(), [spawn(1000, 'p1', 'Write the migration')])
+  expect(research(rec).probes[0]?.doing).toBe(undefined)
+  rec = run(rec, [act(1100, 'p1', 'Edit', { file_path: '/w/db/schema.ts' })])
+  expect([research(rec).probes[0]?.doing, research(rec).probes[0]?.lastAction]).toEqual(['coding', 'Edit schema.ts'])
+  rec = run(rec, [act(1200, 'p1', 'Bash', { command: 'npm test' })])
+  expect(research(rec).probes[0]?.doing).toBe('testing')
+  // A call that is none of the three keeps what the probe did, and names the call.
+  rec = run(rec, [act(1300, 'p1', 'TodoWrite', {})])
+  expect([research(rec).probes[0]?.doing, research(rec).probes[0]?.lastAction]).toEqual(['testing', 'TodoWrite'])
+  // A loop nobody sent out is not drawn as anything.
+  expect(research(run(rec, [act(1400, 'fork', 'Edit', { file_path: '/x' })])).probes.map(p => p.id)).toEqual(['p1'])
+  // What it did survives a read back from the file; a value this version cannot read drops the research.
+  expect(mend(JSON.parse(JSON.stringify(rec))).research?.probes[0]?.doing).toBe('testing')
+  const odd = { ...rec, research: { ...research(rec), probes: [{ ...research(rec).probes[0], doing: 'dancing' }] } } as unknown as AgentRecord
+  expect(mend(odd).research).toBe(undefined)
 })

@@ -8,6 +8,7 @@ import type {
   ViewMode,
   SceneAgent,
   SceneResource,
+  SceneSubagent,
   Slots,
   Snapshot,
   Spark,
@@ -50,7 +51,25 @@ const toScene = (a: AgentView, isQueued: boolean, usage: UsageReport | null = nu
   ...(usage?.agents[a.id] === undefined ? {} : { usage: usage.agents[a.id] }),
   ...(a.plan === undefined || a.plan.length === 0 ? {} : { plan: a.plan }),
   ...(a.mode === undefined ? {} : { mode: a.mode }),
+  ...(a.title === undefined ? {} : { title: a.title }),
+  ...subagentsOf(a),
 })
+
+/** The subagents an agent has at work now, as the team's scene draws them. */
+function subagentsOf(a: AgentView): { subagents?: SceneSubagent[] } {
+  const running = (a.research?.probes ?? []).filter(p => p.status === 'running')
+  if (running.length === 0) return {}
+
+  return {
+    subagents: running.map(p => ({
+      id: p.id,
+      label: p.label,
+      inFlight: p.inFlight,
+      ...(p.doing === undefined ? {} : { doing: p.doing }),
+      ...(p.lastAction === undefined ? {} : { lastAction: p.lastAction }),
+    })),
+  }
+}
 
 export type StageOptions = {
   view?: ViewMode

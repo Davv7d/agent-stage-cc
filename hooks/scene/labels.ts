@@ -1,4 +1,4 @@
-import type { AgentState, ProbeStatus } from '../../types'
+import type { AgentState, ProbeStatus, ProbeWork } from '../../types'
 
 export type Lang = 'en' | 'pl'
 
@@ -16,6 +16,12 @@ type Words = {
   branch: string
   last: string
   more: (n: number) => string
+  /** The worktree's folder, in a card that heads with the session's title. */
+  worktree: string
+  /** Heads a card's list of the subagents at work. */
+  subagents: (n: number) => string
+  /** What a subagent does now; `starting` before its first call. */
+  doing: Record<ProbeWork | 'starting', string>
   queue: string
   free: string
   restoring: string
@@ -95,6 +101,9 @@ export const WORDS: Record<Lang, Words> = {
     branch: 'branch',
     last: 'last action',
     more: n => `+${n} more`,
+    worktree: 'worktree',
+    subagents: n => `${n} ${enPlural(n, 'subagent', 'subagents')} at work`,
+    doing: { research: 'reading', coding: 'coding', testing: 'testing', starting: 'starting' },
     queue: 'queue',
     free: 'free',
     restoring: 'restoring',
@@ -161,6 +170,9 @@ export const WORDS: Record<Lang, Words> = {
     branch: 'gałąź',
     last: 'ostatnio',
     more: n => `+${n} więcej`,
+    worktree: 'worktree',
+    subagents: n => `${n} ${plPlural(n, 'subagent pracuje', 'subagenty pracują', 'subagentów pracuje')}`,
+    doing: { research: 'czyta', coding: 'koduje', testing: 'testuje', starting: 'startuje' },
     queue: 'kolejka',
     free: 'wolny',
     restoring: 'przywracanie',

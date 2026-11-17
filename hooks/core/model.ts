@@ -70,7 +70,10 @@ export function isAgentRecord(value: unknown): value is AgentRecord {
 export function mend(stored: AgentRecord): AgentRecord {
   // Research this version cannot read is left out: it is kept anew from the next spawn.
   const { research: _unread, ...known } = stored
-  const read: AgentRecord = stored.research === undefined || isResearch(stored.research) ? stored : known
+  const studied: AgentRecord = stored.research === undefined || isResearch(stored.research) ? stored : known
+  // A title is text, or it is not there.
+  const { title: odd, ...untitled } = studied
+  const read: AgentRecord = odd === undefined || typeof odd === 'string' ? studied : untitled
   const { plan: raw, ...bare } = read
   const plan = mendPlan(raw)
   // A record with nothing to mend is handed back as it is.

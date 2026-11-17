@@ -205,3 +205,21 @@ test('/stage view research keeps the research from then on, and the demo shows o
   expect(source).toContain('SOURCES')
   await ui.unmount()
 })
+
+test('the session title the app gives reaches the record, and follows a rename', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  mock.env(on, { HOME: '/home/me' })
+  const { files } = machine(on)
+  const title = () => JSON.parse(files.get(FILE) ?? '{}').title
+  on('classic.SessionStart', () => ({}))
+  on('classic.UserPromptSubmit', () => ({}))
+
+  await $.session.start({ cwd: TOP, surface: 'desktop', isInteractive: true })
+  await $.classic.SessionStart({ source: 'startup', session_title: 'Shop: checkout in one step' })
+  expect(title()).toBe('Shop: checkout in one step')
+  await $.classic.UserPromptSubmit({ prompt: 'go', session_title: 'Shop: checkout and invoices' })
+  expect(title()).toBe('Shop: checkout and invoices')
+  // A prompt without a title leaves the one the session has.
+  await $.classic.UserPromptSubmit({ prompt: 'go on' })
+  expect(title()).toBe('Shop: checkout and invoices')
+})

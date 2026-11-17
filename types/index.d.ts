@@ -61,10 +61,15 @@ export type AgentRecord = {
   isRoleFromMode?: true
   /** The session's research, once it starts a subagent or its pane shows the research scene. */
   research?: Research
+  /** The session's title as the app lists the session; the stage names the agent by it. */
+  title?: string
 }
 
 /** Where one subagent of a session stands. */
 export type ProbeStatus = 'running' | 'done' | 'stopped' | 'failed'
+
+/** What a subagent was last seen doing: reading or searching, editing, or running tests. */
+export type ProbeWork = 'research' | 'coding' | 'testing'
 
 /** One subagent the session started: a probe sent out after one question. */
 export type ResearchProbe = {
@@ -79,6 +84,9 @@ export type ResearchProbe = {
   inFlight: number
   /** Its searches and reads in all. */
   calls: number
+  /** What its last call did, and that call in short. */
+  doing?: ProbeWork
+  lastAction?: string
   startedAt: number
   /** When it last finished. */
   endedAt?: number
@@ -225,6 +233,20 @@ export type SceneAgent = {
   plan?: PlanStep[]
   /** The working mode the agent's session is in, by name. */
   mode?: string
+  /** The session's title as the app lists it, where it has one. */
+  title?: string
+  /** The subagents it has at work now, first started first. */
+  subagents?: SceneSubagent[]
+}
+
+/** A subagent at work, as the team's scene draws it beside the agent that started it. */
+export type SceneSubagent = {
+  id: string
+  label: string
+  doing?: ProbeWork
+  /** Its searches and reads running now. */
+  inFlight: number
+  lastAction?: string
 }
 
 /** Which scene the pane shows: the team, one agent's plan, its research, or whichever fits. */

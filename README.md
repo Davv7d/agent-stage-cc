@@ -211,7 +211,11 @@ The pane shows one of three scenes, drawn from the same parts.
 
 - **The team**: every agent in its zone. Agents keep a fixed place and glide
   between zones as their state changes. An agent that keeps a task list shows
-  its progress, such as `3/7`, beside it.
+  its progress, such as `3/7`, beside it. An agent that has subagents at work
+  has them beside it as small satellites, four drawn and the rest counted:
+  hollow while one reads or searches, with a spark for each search in flight,
+  solid while it edits, light while it runs tests. Its hover card says what
+  the first few are for and what each did last.
 - **A plan**: one agent on the left and its steps in three zones. The step in
   progress is joined to the agent by a line that sparks while the agent
   works, faster for tests than for reading. Finished steps move to the right.
@@ -253,8 +257,11 @@ gate, marked as waiting for you; an agent that runs on never shows the gate.
 
 Each session that has the mod records what its agent is doing in a small file
 shared by every worktree of the repository, and every session draws the stage
-from those files. One agent is one worktree; its name and its color follow
-the worktree folder's name.
+from those files. One agent is one worktree, and its color follows the
+worktree folder's name. Its name on the stage is its session's title, as the
+app lists the session, cut at the end so that its beginning tells it from the
+others; a session without a title goes by the folder's name. The hover card
+names the folder under the title.
 
 | State | When |
 | --- | --- |
