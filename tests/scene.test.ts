@@ -6,7 +6,7 @@ import { toSnapshot } from '../hooks/core/model'
 import { appleLanguage, langFrom, langOf } from '../hooks/scene/labels'
 import { fitLayout } from '../hooks/scene/layout'
 import { neon } from '../hooks/scene/neon'
-import { describeScene, MAX_SOURCE, renderScene, shorten } from '../hooks/scene/scene'
+import { describeScene, MAX_SOURCE, renderScene, SATELLITE_ANGLES, SATELLITE_RADIUS, SATELLITE_SIZE, shorten } from '../hooks/scene/scene'
 import { emptyResearch } from '../hooks/core/research'
 import type { ProbeWork, ResearchProbe } from '../types'
 import { colorOf } from '../hooks/scene/skin'
@@ -327,4 +327,17 @@ test('in a docked pane the names in the PR row leave room for each other', async
   const gap = (layout.pr(1)[0] - layout.pr(0)[0])
   expect(layout.prNameMax * 6.3).toBeLessThan(gap)
   expect(layout.pr(0)[0] - (layout.prNameMax * 6.3) / 2).toBeGreaterThan(0)
+})
+
+test('subagents stand clear of the caption above the first row and of the name below', async () => {
+  const ys = SATELLITE_ANGLES.map(deg => Math.sin((deg * Math.PI) / 180) * SATELLITE_RADIUS)
+  const top = Math.min(...ys) - SATELLITE_SIZE
+  const bottom = Math.max(...ys) + SATELLITE_SIZE
+  // A name's baseline is 31 under the ball's center; its letters reach about 8 above that.
+  expect(bottom).toBeLessThan(31 - 8)
+  for (const [columns, rows] of [[140, 40], [91, 46], [54, 46], [200, 60]] as const) {
+    const { layout } = fitLayout(columns, rows, false)
+    // The caption's baseline is its lowest point.
+    expect(layout.work(0)[1] + top).toBeGreaterThan(layout.captions.work[1] + 4)
+  }
 })

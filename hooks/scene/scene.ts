@@ -179,8 +179,15 @@ function subagentRows(a: SceneAgent, o: SceneOptions): string[] {
 
 /** Subagents a card names; the rest it counts. */
 const CARD_SUBAGENTS = 3
-/** Where around an agent its subagents stand, in degrees: over it and to its left, clear of its name and its plan. */
-const SATELLITE_ANGLES = [-90, -126, -162, -198]
+/**
+ * Where around an agent its subagents stand, in degrees: on its upper left,
+ * clear of the zone's caption above it, its name below and its plan's count
+ * on its right.
+ */
+export const SATELLITE_ANGLES = [-125, -155, -185, -215]
+/** How far from an agent's center its subagents stand, and how large each is. */
+export const SATELLITE_RADIUS = 29
+export const SATELLITE_SIZE = 5
 
 /**
  * The subagents an agent has at work, as small satellites on an arc around
@@ -192,8 +199,8 @@ export function satellites(subs: readonly SceneSubagent[], color: string, radius
   if (subs.length === 0) return ''
   const shown = subs.slice(0, SATELLITE_ANGLES.length)
   const point = (deg: number, r: number): [number, number] => [Math.cos((deg * Math.PI) / 180) * r, Math.sin((deg * Math.PI) / 180) * r]
-  const [fx, fy] = point(-72, radius)
-  const [tx, ty] = point(-216, radius)
+  const [fx, fy] = point(-107, radius)
+  const [tx, ty] = point(-229, radius)
   let g = `<path d="M${n1(fx)} ${n1(fy)}A${radius} ${radius} 0 0 0 ${n1(tx)} ${n1(ty)}" fill="none" stroke="${color}" stroke-opacity=".3" stroke-dasharray="1.5 3.5"/>`
   shown.forEach((s, i) => {
     const deg = SATELLITE_ANGLES[i] ?? -90
@@ -202,23 +209,23 @@ export function satellites(subs: readonly SceneSubagent[], color: string, radius
     let body: string
     switch (s.doing) {
       case 'coding':
-        body = `<circle r="5" fill="${color}"><animate attributeName="opacity" values=".55;1;.55" dur="1.2s" begin="${begin}s" repeatCount="indefinite"/></circle>`
+        body = `<circle r="${SATELLITE_SIZE}" fill="${color}"><animate attributeName="opacity" values=".55;1;.55" dur="1.2s" begin="${begin}s" repeatCount="indefinite"/></circle>`
         break
       case 'testing':
-        body = `<circle r="5" fill="#e7ebf2" stroke="${color}" stroke-width="1.2"><animate attributeName="r" values="4.4;5.4;4.4" dur=".8s" begin="${begin}s" repeatCount="indefinite"/></circle>`
+        body = `<circle r="${SATELLITE_SIZE}" fill="#e7ebf2" stroke="${color}" stroke-width="1.2"><animate attributeName="r" values="4.4;5.4;4.4" dur=".8s" begin="${begin}s" repeatCount="indefinite"/></circle>`
         break
       case 'research': {
         const [dx, dy] = point(deg, 1)
         const sparks = Array.from({ length: Math.min(s.inFlight, 3) }, (_, k) => {
           const at = `${n1(i * 0.37 + k * 0.3)}s`
 
-          return `<circle r="1.7" fill="${color}"><animate attributeName="cx" values="${n1(dx * 6)};${n1(dx * 15)}" dur=".9s" begin="${at}" repeatCount="indefinite"/><animate attributeName="cy" values="${n1(dy * 6)};${n1(dy * 15)}" dur=".9s" begin="${at}" repeatCount="indefinite"/><animate attributeName="opacity" values="1;0" dur=".9s" begin="${at}" repeatCount="indefinite"/></circle>`
+          return `<circle r="1.7" fill="${color}"><animate attributeName="cx" values="${n1(dx * 6)};${n1(dx * 13)}" dur=".9s" begin="${at}" repeatCount="indefinite"/><animate attributeName="cy" values="${n1(dy * 6)};${n1(dy * 13)}" dur=".9s" begin="${at}" repeatCount="indefinite"/><animate attributeName="opacity" values="1;0" dur=".9s" begin="${at}" repeatCount="indefinite"/></circle>`
         }).join('')
-        body = `${sparks}<circle r="5" fill="#0f1420" stroke="${color}" stroke-width="1.4"/><circle r="1.4" fill="${color}"/>`
+        body = `${sparks}<circle r="${SATELLITE_SIZE}" fill="#0f1420" stroke="${color}" stroke-width="1.4"/><circle r="1.4" fill="${color}"/>`
         break
       }
       default:
-        body = `<circle r="5" fill="#0f1420" stroke="${color}" stroke-width="1.2" stroke-opacity=".5" stroke-dasharray="2 2"/>`
+        body = `<circle r="${SATELLITE_SIZE}" fill="#0f1420" stroke="${color}" stroke-width="1.2" stroke-opacity=".5" stroke-dasharray="2 2"/>`
     }
     g += `<g transform="translate(${n1(x)},${n1(y)})">${body}</g>`
   })
@@ -323,7 +330,7 @@ export function renderScene(stage: Stage, layout: Layout, skin: Skin, o: SceneOp
     // How far the agent's plan is, at the ball's shoulder.
     const steps = a.plan === undefined ? undefined : progressOf(a.plan)
     const progress = steps === undefined ? '' : `<text x="19" y="-17" class="t st" style="fill:${color}">${steps.done}/${steps.total}</text>`
-    balls += `<g transform="translate(${at[0]},${at[1]})"${isDim ? ` opacity="${a.isAsleep ? 0.35 : 0.2}"` : ''}>${travel}${fade}${cost}${progress}<g transform="scale(${layout.scale})">${skin.glyph(a, { color, ...(place.zone === 'queue' ? { queueIndex: place.index } : {}) })}</g>${satellites(a.subagents ?? [], color, 29)}<text y="${31 + drop}" class="t nm" text-anchor="middle" fill="${color}">${esc(nameOf(a, place.zone === 'pr' ? layout.prNameMax : layout.nameMax))}</text>${label}</g>`
+    balls += `<g transform="translate(${at[0]},${at[1]})"${isDim ? ` opacity="${a.isAsleep ? 0.35 : 0.2}"` : ''}>${travel}${fade}${cost}${progress}<g transform="scale(${layout.scale})">${skin.glyph(a, { color, ...(place.zone === 'queue' ? { queueIndex: place.index } : {}) })}</g>${satellites(a.subagents ?? [], color, SATELLITE_RADIUS)}<text y="${31 + drop}" class="t nm" text-anchor="middle" fill="${color}">${esc(nameOf(a, place.zone === 'pr' ? layout.prNameMax : layout.nameMax))}</text>${label}</g>`
     tips += `<g class="hit"><circle cx="${at[0]}" cy="${at[1]}" r="24" fill="#000" fill-opacity="0"/>${card(a, at, layout, o, levels?.cores ?? 1)}</g>`
 
     if (hasLead && o.links && place.zone === 'work' && a.state !== 'idle') {
