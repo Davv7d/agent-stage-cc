@@ -21,23 +21,22 @@ const TITLES: Record<string, string> = {
   'i18n-dates': "Dates in the reader's language",
 }
 
-/** What the demo's subagents are sent for, and what they do in turn. */
-const ERRANDS = ['Find every caller', 'Write the migration', 'Run the slow tests', 'Read the API docs']
-const WORKS: readonly ProbeWork[] = ['research', 'coding', 'testing', 'research']
-const WORK_ACTIONS: Record<ProbeWork, string> = { research: 'Grep "export function"', coding: 'Edit schema.ts', testing: '$ npm test -- slow' }
+/** What the demo's subagents are sent for, what that has them do, and their calls in turn. */
+const ERRANDS: readonly { label: string; doing: ProbeWork; calls: readonly string[] }[] = [
+  { label: 'Find every caller', doing: 'research', calls: ['Grep "exportCsv"', 'Read routes.ts', 'Grep "toCsv("'] },
+  { label: 'Write the migration', doing: 'coding', calls: ['Edit 0042_export.sql', 'Edit schema.ts', 'Write seed.ts'] },
+  { label: 'Run the slow tests', doing: 'testing', calls: ['$ npm test -- slow', '$ npm test -- export', '$ npm test -- e2e'] },
+  { label: 'Read the API docs', doing: 'research', calls: ['WebFetch docs.example/api', 'WebSearch csv rfc 4180', 'Read docs/api.md'] },
+]
 
 /** Some agents send subagents out while they work: one to four, each busy with something. */
 function demoSubagents(id: string, i: number, state: AgentState, step: number, now: number): { research?: Research } {
   if (i % 3 !== 0 || (state !== 'coding' && state !== 'research')) return {}
   const count = 1 + ((step + i) % 4)
-  const probes: ResearchProbe[] = Array.from({ length: count }, (_, k) => {
-    const doing = WORKS[(Math.floor(step / 3) + k) % WORKS.length] ?? 'research'
-
-    return {
-      id: `${id}-sub-${k}`, label: ERRANDS[k] ?? 'Help', status: 'running', doing, lastAction: WORK_ACTIONS[doing],
-      inFlight: doing === 'research' ? 1 + ((step + k) % 3) : 0, calls: 3 + k * 2, startedAt: now,
-    }
-  })
+  const probes: ResearchProbe[] = ERRANDS.slice(0, count).map(({ label, doing, calls }, k) => ({
+    id: `${id}-sub-${k}`, label, status: 'running', doing, lastAction: calls[(step + k) % calls.length] ?? '',
+    inFlight: doing === 'research' ? 1 + ((step + k) % 3) : 0, calls: 3 + step + k * 2, startedAt: now,
+  }))
 
   return { research: { since: now, inFlight: 0, calls: probes.reduce((n, p) => n + p.calls, 0), probes, sources: [], history: [], peak: 0, peakAt: 0 } }
 }

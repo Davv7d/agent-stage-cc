@@ -177,6 +177,14 @@ function subagentRows(a: SceneAgent, o: SceneOptions): string[] {
   return [w.subagents(subs.length), ...shown, ...(subs.length > CARD_SUBAGENTS ? [w.more(subs.length - CARD_SUBAGENTS)] : [])]
 }
 
+/**
+ * Characters of a name that fit where the agent stands. The queue curls
+ * round the ring, so a name there must stop short of the ring's edge.
+ */
+export const QUEUE_NAME_MAX = 18
+const nameRoom = (place: Place, layout: Layout) =>
+  place.zone === 'pr' ? layout.prNameMax : place.zone === 'queue' ? Math.min(layout.nameMax, QUEUE_NAME_MAX) : layout.nameMax
+
 /** Subagents a card names; the rest it counts. */
 const CARD_SUBAGENTS = 3
 /**
@@ -330,7 +338,7 @@ export function renderScene(stage: Stage, layout: Layout, skin: Skin, o: SceneOp
     // How far the agent's plan is, at the ball's shoulder.
     const steps = a.plan === undefined ? undefined : progressOf(a.plan)
     const progress = steps === undefined ? '' : `<text x="19" y="-17" class="t st" style="fill:${color}">${steps.done}/${steps.total}</text>`
-    balls += `<g transform="translate(${at[0]},${at[1]})"${isDim ? ` opacity="${a.isAsleep ? 0.35 : 0.2}"` : ''}>${travel}${fade}${cost}${progress}<g transform="scale(${layout.scale})">${skin.glyph(a, { color, ...(place.zone === 'queue' ? { queueIndex: place.index } : {}) })}</g>${satellites(a.subagents ?? [], color, SATELLITE_RADIUS)}<text y="${31 + drop}" class="t nm" text-anchor="middle" fill="${color}">${esc(nameOf(a, place.zone === 'pr' ? layout.prNameMax : layout.nameMax))}</text>${label}</g>`
+    balls += `<g transform="translate(${at[0]},${at[1]})"${isDim ? ` opacity="${a.isAsleep ? 0.35 : 0.2}"` : ''}>${travel}${fade}${cost}${progress}<g transform="scale(${layout.scale})">${skin.glyph(a, { color, ...(place.zone === 'queue' ? { queueIndex: place.index } : {}) })}</g>${satellites(a.subagents ?? [], color, SATELLITE_RADIUS)}<text y="${31 + drop}" class="t nm" text-anchor="middle" fill="${color}">${esc(nameOf(a, nameRoom(place, layout)))}</text>${label}</g>`
     tips += `<g class="hit"><circle cx="${at[0]}" cy="${at[1]}" r="24" fill="#000" fill-opacity="0"/>${card(a, at, layout, o, levels?.cores ?? 1)}</g>`
 
     if (hasLead && o.links && place.zone === 'work' && a.state !== 'idle') {

@@ -4,9 +4,9 @@ import type { AgentRecord, AgentState, ResourceView, Snapshot } from '../types'
 import { demoSnapshot, demoUsage } from '../hooks/core/demo'
 import { toSnapshot } from '../hooks/core/model'
 import { appleLanguage, langFrom, langOf } from '../hooks/scene/labels'
-import { fitLayout } from '../hooks/scene/layout'
+import { fitLayout, RING_OUTER } from '../hooks/scene/layout'
 import { neon } from '../hooks/scene/neon'
-import { describeScene, MAX_SOURCE, renderScene, SATELLITE_ANGLES, SATELLITE_RADIUS, SATELLITE_SIZE, shorten } from '../hooks/scene/scene'
+import { describeScene, MAX_SOURCE, QUEUE_NAME_MAX, renderScene, SATELLITE_ANGLES, SATELLITE_RADIUS, SATELLITE_SIZE, shorten } from '../hooks/scene/scene'
 import { emptyResearch } from '../hooks/core/research'
 import type { ProbeWork, ResearchProbe } from '../types'
 import { colorOf } from '../hooks/scene/skin'
@@ -340,4 +340,14 @@ test('subagents stand clear of the caption above the first row and of the name b
     // The caption's baseline is its lowest point.
     expect(layout.work(0)[1] + top).toBeGreaterThan(layout.captions.work[1] + 4)
   }
+})
+
+test('a name in the queue stops short of the ring it waits for', async () => {
+  // The first in line stands left of the ring, level with its center: its name reaches right toward the ring.
+  const { layout } = fitLayout(140, 40, true)
+  const ring = layout.ring
+  if (ring === undefined) throw new Error('no ring')
+  const first = ring.queue(0)
+  const halfName = (QUEUE_NAME_MAX * 6.3) / 2
+  expect(first[0] + halfName).toBeLessThan(ring.center[0] - RING_OUTER - 4)
 })
