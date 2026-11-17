@@ -1,6 +1,6 @@
 import type { AgentRecord, AgentState, Research } from '../../types'
 import { endsWithQuestion, findPrUrl } from './derive'
-import type { Action } from './derive'
+import type { Action, ActionKind } from './derive'
 import { isFinished, planAfter } from './plan'
 import {
   callEnded,
@@ -128,6 +128,20 @@ export function apply(rec: AgentRecord, event: StageEvent): AgentRecord {
   return { ...next, updatedAt: event.at }
 }
 
+/** States an agent rests in between its own turns. */
+const RESTING = new Set<AgentState>(['idle', 'question', 'pr', 'done', 'failed'])
+/** What a subagent's call does to the agent it works for even while that agent rests. */
+const MOVES_AT_REST = new Set<ActionKind>(['pr-create', 'pr-merge', 'coordinate'])
+
+/**
+ * Whether a call moves the agent's own state. Its own calls always do. A
+ * subagent's do while the agent's own turn runs; once the agent rests, a
+ * subagent working on in the background is drawn beside it and leaves its
+ * state alone, unless it opens or merges a pull request or hands work out.
+ */
+const movesAgent = (rec: AgentRecord, loop: string | undefined, kind: ActionKind) =>
+  loop === undefined || !RESTING.has(rec.state) || MOVES_AT_REST.has(kind)
+
 /** A title longer than this is cut: the stage shows its beginning only. */
 const MAX_TITLE = 120
 
@@ -176,11 +190,12 @@ function step(rec: AgentRecord, event: StageEvent): AgentRecord {
       return plan.length === 0 ? rest : { ...rest, plan }
     }
     case 'turn-start': {
-      // A new order after a finished plan starts from an empty one, and so
-      // does its research, unless some of it still runs.
+      // A new order after a finished plan starts from an empty one. Its
+      // research starts anew too, as does that of a session that keeps no
+      // plan, unless some of it still runs: what is drawn is this order's.
       const { before: _answered, plan, ...fresh } = { ...rec, promptAt: event.at }
-      const isNewOrder = plan !== undefined && isFinished(plan)
-      const prompted = plan === undefined || isNewOrder ? fresh : { ...fresh, plan }
+      const isNewOrder = plan === undefined || isFinished(plan)
+      const prompted = isNewOrder ? fresh : { ...fresh, plan }
       const anew = isNewOrder && prompted.research !== undefined && !isRunning(prompted.research)
         ? { ...prompted, research: emptyResearch(event.at) }
         : prompted
@@ -189,16 +204,18 @@ function step(rec: AgentRecord, event: StageEvent): AgentRecord {
       return wakes ? enter(anew, 'research', event.at) : anew
     }
     case 'tool-start': {
-      const acted = onToolStart(rec, event.at, event.action)
+      const loop = event.loop
+      const moved = movesAgent(rec, loop, event.action.kind) ? onToolStart(rec, event.at, event.action) : rec
+      // A subagent's call is its own last action, drawn beside it; the agent keeps its own.
+      const acted = loop === undefined ? moved : { ...moved, lastAction: rec.lastAction }
 
       // A probe's call says what the probe does now.
-      const loop = event.loop
       const seen = loop === undefined ? acted : researched(acted, r => probeActed(r, loop, event.action))
 
       return event.isSearch === true ? researched(seen, r => callStarted(r, event.at, loop)) : seen
     }
     case 'tool-end': {
-      const ended = onToolEnd(rec, event.at, event.action, event.isError, event.output ?? '')
+      const ended = movesAgent(rec, event.loop, event.action.kind) ? onToolEnd(rec, event.at, event.action, event.isError, event.output ?? '') : rec
 
       return event.isSearch === true ? researched(ended, r => callEnded(r, event.at, event.loop, event.found)) : ended
     }

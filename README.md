@@ -117,12 +117,14 @@ it, so one command is enough. `/stage agent` lists the modes on offer, and
 - **`full`**: the whole task in one run. The same stages, without stopping for
   approval between them.
 - **`research`**: you name a topic and the agent researches it. It restates
-  the question and asks where the report should go (in the chat, or a file
-  such as `research/<slug>.md`, made only if you agree) and how deep to go.
-  It splits the topic into sub-questions, sends one subagent after each, at
-  most five at a time unless you say otherwise, checks each key claim against
-  two independent sources, and reports the answer first, then the findings
-  with links, what is uncertain and what was not checked.
+  the question, asks where the report should go (in the chat, or a file such
+  as `research/<slug>.md`, made only if you agree), how deep to go, and
+  whether you have sources of your own, such as your documents: those are
+  read first. It splits the topic into sub-questions, sends one subagent
+  after each, at most five at a time unless you say otherwise, checks each
+  key claim against two independent sources, and reports the answer first,
+  then the findings, each with where it stands so you can find it yourself:
+  a web page's exact address, or your document with its page or section.
 - **`coordinate`**: the session takes your tasks in, splits them, hands each
   piece to an agent in a worktree of its own, watches over them and brings
   their questions and results to you. It also keeps the record of the shared
@@ -151,6 +153,8 @@ it, so one command is enough. `/stage agent` lists the modes on offer, and
   and it commits and pushes only when you agree. In an existing project it
   asks only about the gaps, and it changes no file without showing you the
   change. Its phases are its task list, as in `plan`.
+
+![The research scene: subagents on an orbit, the sources read first and marked, one source's exact address on hover, demo data](docs/research.png)
 
 Every mode tells the agent to speak the language you write in, whatever
 language the mode is written in, and that the project's own rules in its
@@ -275,9 +279,14 @@ The pane shows one of three scenes, drawn from the same parts.
 - **Research**: one agent in the middle and the subagents it sent out on an
   orbit round it, each labelled with its question. Every search or read in
   flight throws a spark from the ball that runs it, so you see how many run at
-  once. A shelf collects the sources by domain, lit once a page of one was
-  read. A line beneath shows how many searches ran at once over the last ten
-  minutes, with the peak marked, and a counter says it in words:
+  once. A shelf collects the sources, one tile per domain or document. The
+  ones read, where something was found, stand first and are marked, a dot
+  for a web page and a square for a document of yours; the ones only found
+  among search results follow, the most often found first, and the caption
+  counts both. Pointing at a tile shows its exact address, or a document's
+  path and the pages read, so you can find it yourself. A line beneath shows
+  how many searches ran at once over the last ten minutes, with the peak
+  marked, and a counter says it in words:
   `in flight: 5 searches · 3 probes · 27 sources`.
 
 ![One agent researching a topic: its subagents, the searches in flight and the sources found, demo data](docs/research.gif)
@@ -291,12 +300,17 @@ The research is read off the calls too. A subagent the session starts is a
 probe, named by the description its Agent call gave it, and it is finished
 when its own turn ends. A search is `WebSearch`, `WebFetch`, `Read`, `Grep`,
 `Glob`, a read-only shell command, or a connected server's tool whose name
-says search or fetch. The sources are the domains of the pages fetched and of
-the links searches return, up to 60. The record is kept once the session
-starts a subagent or its pane shows the research scene. What runs is cleared
-when a turn ends, when it is broken off and when the session ends, so no
-count stays behind; with many searches at once the agent's file is written
-at most once a second.
+says search or fetch. The sources are the pages fetched and the links
+searches return, by domain, each with its exact address (the page read
+before one only found), and the documents read from disk (PDF, Word,
+Markdown, text and the like, not code), each with its path and the pages
+read. A record keeps 60; past that, a source read takes the place of the one
+only found least often. The record is kept once the session starts a
+subagent or its pane shows the research scene, held to it or left to a mode
+watched on it. A new prompt starts it anew where no plan under way carries it
+and nothing of it still runs. What runs is cleared when a turn ends, when it
+is broken off and when the session ends, so no count stays behind; with many
+searches at once the agent's file is written at most once a second.
 
 Left on `auto`, the pane shows research when exactly one agent is in play
 (not asleep, not merged) and it is in the `research` mode or has a subagent
@@ -329,6 +343,12 @@ names the folder under the title.
 | `queue` | The agent waits for the shared resource |
 | `pr` | `gh pr create` answered with a pull request's address |
 | `done` | The pull request merged; the agent then leaves the stage |
+
+A subagent's calls move its agent's state while the agent's own turn runs.
+Once the agent rests, a subagent working on in the background shows only as
+its satellite and leaves the agent's state alone, unless it opens or merges
+a pull request; its calls are never the agent's last action. A call broken
+off, as when you stop a test run, is not a failed one.
 
 Pink always means a question for you, red an error, amber something worth a
 look. A session becomes the **coordinator** the first time it hands work to

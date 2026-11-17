@@ -1,9 +1,9 @@
 import { progressOf } from '../core/plan'
-import type { ProbeStatus, ResearchScene, SceneProbe, Stage } from '../../types'
+import type { ProbeStatus, ResearchScene, ResearchSource, SceneProbe, Stage } from '../../types'
 import { WORDS } from './labels'
 import type { Lang } from './labels'
 import type { Point, ResearchLayout } from './layout'
-import { card, esc, frame, gauges, meters, move, n1, nameOf, shorten } from './scene'
+import { card, cut, esc, frame, gauges, meters, move, n1, nameOf, shorten } from './scene'
 import type { SceneOptions } from './scene'
 import { ASK, BAD, colorOf } from './skin'
 import type { Skin } from './skin'
@@ -122,13 +122,64 @@ function probeTip(p: SceneProbe, at: Point, layout: ResearchLayout, o: SceneOpti
   return `<g class="hit"><circle cx="${at[0]}" cy="${at[1]}" r="${PROBE_RADIUS + 4}" fill="#000" fill-opacity="0"/><g class="tip"><rect x="${n1(x)}" y="${n1(y)}" width="${width}" height="${height}" rx="7" fill="#161d2c" stroke="${tone}" stroke-opacity=".7"/><text x="${n1(x + 10)}" y="${n1(y + 19)}" class="t nm" fill="${tone}">${esc(w.probe[p.status])}</text>${lines}</g></g>`
 }
 
-/** The sources found so far, one tile per domain, first found first; a read one is lit. */
-function shelf(scene: ResearchScene, layout: ResearchLayout, o: SceneOptions): string {
+/**
+ * The sources in the order a reader wants them: the ones read first, in the
+ * order they were read, since those are where something was found; then the
+ * ones only found, the most often found first.
+ */
+export function ranked(sources: readonly ResearchSource[]): ResearchSource[] {
+  const read = sources.filter(s => s.isRead === true)
+  const found = sources.filter(s => s.isRead !== true).map((s, i) => ({ s, i }))
+  found.sort((a, b) => b.s.hits - a.s.hits || a.i - b.i)
+
+  return [...read, ...found.map(f => f.s)]
+}
+
+/** Characters of an address on one line of a source's card, and the lines it may take. */
+const URL_LINE = 50
+const URL_LINES = 4
+
+/** An address cut into lines that fit a card, whole where it fits. */
+function addressLines(url: string): string[] {
+  const lines: string[] = []
+  for (let i = 0; i < url.length && lines.length < URL_LINES; i += URL_LINE) lines.push(url.slice(i, i + URL_LINE))
+  if (url.length > URL_LINE * URL_LINES) lines[URL_LINES - 1] = `${(lines[URL_LINES - 1] ?? '').slice(0, URL_LINE - 1)}…`
+
+  return lines
+}
+
+/** A source's hover card: what it is, whether it was read, its pages and its exact address. */
+function sourceCard(s: ResearchSource, at: Point, size: { width: number; height: number }, layout: ResearchLayout, o: SceneOptions): string {
+  const w = WORDS[o.lang].research
+  const isRead = s.isRead === true
+  const rows = [
+    w.sourceLine(s.hits, isRead, s.isFile === true),
+    ...(s.pages === undefined || s.pages.length === 0 ? [] : [w.pages(s.pages.join(', '))]),
+    ...(s.url === undefined ? [] : addressLines(s.url)),
+  ]
+  const width = 300
+  const height = 30 + rows.length * 14
+  const x = Math.max(6, Math.min(layout.width - width - 6, at[0] + size.width - width))
+  const below = at[1] + size.height + 6
+  const y = below + height > layout.height - 6 ? at[1] - 6 - height : below
+  const lines = rows.map((row, i) => `<text x="${n1(x + 10)}" y="${n1(y + 36 + i * 14)}" class="t st">${esc(row)}</text>`).join('')
+  const tone = isRead ? '#60a5fa' : '#3a4458'
+
+  return `<g class="tip"><rect x="${n1(x)}" y="${n1(y)}" width="${width}" height="${height}" rx="7" fill="#161d2c" stroke="${tone}" stroke-opacity=".9"/><text x="${n1(x + 10)}" y="${n1(y + 19)}" class="t nm" fill="${isRead ? TEXT : '#9aa5b8'}">${esc(clip(s.domain, 44))}</text>${lines}</g>`
+}
+
+/**
+ * The sources found so far, one tile per domain or document. The ones read,
+ * where something was found, stand first and are marked; the rest follow.
+ * Pointing at a tile shows its exact address, so the person can find it.
+ */
+function shelf(scene: ResearchScene, layout: ResearchLayout, o: SceneOptions): { body: string; cards: string } {
   const w = WORDS[o.lang]
   const { x, y, columns, rows, tile } = layout.shelf
   const room = columns * rows
-  const shown = scene.sources.length > room ? scene.sources.slice(0, room - 1) : scene.sources
-  const left = scene.sources.length - shown.length
+  const order = ranked(scene.sources)
+  const shown = order.length > room ? order.slice(0, room - 1) : order
+  const left = order.length - shown.length
   const fresh = new Set(scene.freshSources)
   const at = (i: number): Point => [x + (i % columns) * (tile.width + tile.gap), y + Math.floor(i / columns) * (tile.height + tile.gap)]
   const tiles = shown
@@ -136,16 +187,34 @@ function shelf(scene: ResearchScene, layout: ResearchLayout, o: SceneOptions): s
       const [tx, ty] = at(i)
       const isRead = s.isRead === true
       const appear = fresh.has(s.domain) ? '<animate attributeName="opacity" values="0;1" dur=".8s" fill="freeze"/>' : ''
+      // A read web page has a dot, a document of the person's a square.
+      const mark = !isRead ? '' : s.isFile === true
+        ? `<rect x="${tx + 5}" y="${ty + 7}" width="6" height="6" rx="1" fill="#60a5fa"/>`
+        : `<circle cx="${tx + 8}" cy="${ty + 10}" r="3" fill="#60a5fa"/>`
+      const textX = isRead ? tx + 15 : tx + 7
+      const name = clip(s.domain, isRead ? layout.tileMax - 1 : layout.tileMax)
 
-      return `<g><title>${esc(w.research.tile(s.domain, s.hits, isRead))}</title>${appear}<rect x="${tx}" y="${ty}" width="${tile.width}" height="${tile.height}" rx="4" fill="${isRead ? '#17233a' : 'none'}" stroke="${isRead ? '#60a5fa' : '#3a4458'}" stroke-opacity="${isRead ? 0.6 : 1}"/><text x="${tx + 7}" y="${ty + 13.5}" class="t st" style="fill:${isRead ? TEXT : '#7c879b'}">${esc(clip(s.domain, layout.tileMax))}</text></g>`
+      return `<g>${appear}<rect x="${tx}" y="${ty}" width="${tile.width}" height="${tile.height}" rx="4" fill="${isRead ? '#17233a' : 'none'}" stroke="${isRead ? '#60a5fa' : '#3a4458'}" stroke-opacity="${isRead ? 0.85 : 1}"/>${mark}<text x="${textX}" y="${ty + 13.5}" class="t st" style="fill:${isRead ? TEXT : '#7c879b'}">${esc(name)}</text></g>`
+    })
+    .join('')
+  // The cards lie over the whole shelf, each opened by pointing at its tile.
+  const cards = shown
+    .map((s, i) => {
+      const [tx, ty] = at(i)
+
+      return `<g class="hit"><rect x="${tx}" y="${ty}" width="${tile.width}" height="${tile.height}" fill="#000" fill-opacity="0"/>${sourceCard(s, [tx, ty], tile, layout, o)}</g>`
     })
     .join('')
   const [mx, my] = at(shown.length)
   const more = left > 0 ? `<text x="${mx + 7}" y="${my + 13.5}" class="t st">${esc(w.more(left))}</text>` : ''
   const none = scene.sources.length === 0 ? `<text x="${x}" y="${y + 13.5}" class="t st">${esc(w.research.noSources)}</text>` : ''
   const count = `${scene.sources.length}${scene.sourcesCapped ? '+' : ''}`
+  const read = scene.sources.filter(s => s.isRead === true).length
 
-  return `<text x="${layout.captions.shelf[0]}" y="${layout.captions.shelf[1]}" class="t cap">${esc(`${w.research.sources} · ${count}`)}</text>${tiles}${more}${none}`
+  return {
+    body: `<text x="${layout.captions.shelf[0]}" y="${layout.captions.shelf[1]}" class="t cap">${esc(`${w.research.sources} · ${count}${read > 0 ? ` · ${w.research.readCount(read)}` : ''}`)}</text>${tiles}${more}${none}`,
+    cards,
+  }
 }
 
 /** How many searches ran at once, each bar ten seconds, the last one now; the peak is marked. */
@@ -229,23 +298,25 @@ export function renderResearch(stage: Stage, scene: ResearchScene, layout: Resea
   const current = plan.findIndex(s => s.status === 'active')
   const { done, total } = progressOf(plan)
   const hudTop = current >= 0
-    ? `${w.step(current + 1, total)} · ${shorten(plan[current]?.text ?? '', 40)}`
+    ? `${w.step(current + 1, total)} · ${cut(plan[current]?.text ?? '', 40)}`
     : total > 0 ? w.stepsDone(done, total) : (agent.isAsleep ? w.asleep : w.state[agent.state])
   const count = (status: ProbeStatus) => scene.probes.filter(p => p.status === status).length
   const hudBottom = w.research.summary(count('running'), count('done'), count('stopped'), count('failed'), scene.calls)
   const { at, anchor } = layout.counter
+  const sources = shelf(scene, layout, o)
 
   return frame(width, height, skin, o, `<ellipse cx="${cx}" cy="${cy}" rx="${layout.orbit.rx}" ry="${layout.orbit.ry}" fill="none" stroke="#293040" stroke-dasharray="2 8"/>
 <g>${lines}</g>
 ${lead}
 <g>${balls}</g>
-${shelf(scene, layout, o)}
+${sources.body}
 ${sparkline(scene, layout, o, color)}
 <text x="${layout.hudTop[0]}" y="${layout.hudTop[1]}" class="t hud">${esc(hudTop)}</text>
 <text x="${at[0]}" y="${at[1]}" class="t hud"${anchor === 'end' ? ' text-anchor="end"' : ''}>${esc(counterText(scene, o.lang))}</text>
 <text x="${layout.hudBottom[0]}" y="${layout.hudBottom[1]}" class="t st">${esc(hudBottom)}</text>
 ${meters(levels, layout.meters)}
-<g>${tips}</g>`)
+<g>${tips}</g>
+<g>${sources.cards}</g>`)
 }
 
 /** One line of the research as text, for a surface that draws no vector. */
@@ -258,18 +329,26 @@ export function researchRows(scene: ResearchScene, lang: Lang): ResearchRow[] {
   const w = WORDS[lang].research
   const order: ProbeStatus[] = ['running', 'failed', 'done', 'stopped']
   const probes = order.flatMap(status => scene.probes.filter(p => p.status === status))
-  const domains = scene.sources.slice(0, 12).map(s => s.domain)
-  const left = scene.sources.length - domains.length
+  // The sources read come first, each with where it stands; then the rest, by domain.
+  const bySource = ranked(scene.sources)
+  const read = bySource.filter(s => s.isRead === true).slice(0, 8)
+  const others = bySource.filter(s => s.isRead !== true)
+  const domains = others.slice(0, 12).map(s => s.domain)
+  const left = others.length - domains.length
 
   return [
     { key: 'research-counter', text: counterText(scene, lang) },
     ...probes.map(p => ({
       key: `probe-${p.id}`,
-      text: `${MARKS[p.status]} ${shorten(p.label === '' ? w.unnamed : p.label, 60)} · ${w.probeLine(p.status, p.inFlight, p.calls)}`,
+      text: `${MARKS[p.status]} ${cut(p.label === '' ? w.unnamed : p.label, 60)} · ${w.probeLine(p.status, p.inFlight, p.calls)}`,
       ...(p.status === 'failed' ? { tone: 'bad' as const } : {}),
       ...(p.status === 'running' ? {} : { isDim: true }),
     })),
     ...(scene.peak > 0 ? [{ key: 'research-peak', text: w.peak(scene.peak) }] : []),
-    ...(domains.length === 0 ? [] : [{ key: 'research-sources', text: `${w.sources.toLowerCase()}: ${domains.join(', ')}${left > 0 ? ` ${WORDS[lang].more(left)}` : ''}` }]),
+    ...read.map(s => ({
+      key: `source-${s.domain}`,
+      text: `✓ ${s.url ?? s.domain}${s.pages === undefined || s.pages.length === 0 ? '' : ` · ${w.pages(s.pages.join(', '))}`}`,
+    })),
+    ...(domains.length === 0 ? [] : [{ key: 'research-sources', text: `${w.sources.toLowerCase()}: ${domains.join(', ')}${left > 0 ? ` ${WORDS[lang].more(left)}` : ''}`, isDim: true }]),
   ]
 }

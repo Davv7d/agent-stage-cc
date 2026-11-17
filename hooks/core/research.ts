@@ -49,8 +49,26 @@ export function domainOf(url: string): string | undefined {
   return /^[a-z0-9.-]+$/.test(name) && name.includes('.') && !name.startsWith('.') ? name.slice(0, MAX_LABEL) : undefined
 }
 
-/** A domain a call turned up, and whether a page of it was read or only found. */
-export type Found = { domain: string; isRead: boolean }
+/** A domain a call turned up, whether a page of it was read or only found, and which page. */
+export type Found = { domain: string; isRead: boolean; url?: string; isFile?: boolean; pages?: string }
+
+/** An address or a path kept no longer than this. */
+const MAX_URL = 300
+/** Pages of one document kept; past this many the first ones stand. */
+const MAX_PAGES = 6
+
+/** A file read as a source is a document, not code: these are read for what they say. */
+const DOCUMENT = /\.(pdf|docx?|odt|rtf|txt|md|markdown|html?|epub|pptx?|xlsx?|csv)$/i
+
+/** A document of the person's that a read went through, and the pages it asked for. */
+export function documentOf(input: Readonly<Record<string, unknown>>): Found | undefined {
+  const path = typeof input.file_path === 'string' ? input.file_path.trim() : ''
+  if (!DOCUMENT.test(path)) return undefined
+  const name = path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? path
+  const pages = typeof input.pages === 'string' && input.pages.trim() !== '' ? input.pages.trim().slice(0, 20) : undefined
+
+  return { domain: name.slice(0, MAX_LABEL), isRead: true, url: path.slice(0, MAX_URL), isFile: true, ...(pages === undefined ? {} : { pages }) }
+}
 
 const LINKS = /https?:\/\/[^\s"'<>()[\]{}\\`]+/g
 
@@ -60,10 +78,20 @@ const LINKS = /https?:\/\/[^\s"'<>()[\]{}\\`]+/g
  * it has none, the links in what the model read.
  */
 export function sourcesOf(tool: string, input: Readonly<Record<string, unknown>>, result: unknown, text: string): Found[] {
-  const found = new Map<string, boolean>()
+  if (tool === 'Read') {
+    const document = documentOf(input)
+
+    return document === undefined ? [] : [document]
+  }
+  const found = new Map<string, Found>()
   const add = (url: unknown, isRead: boolean) => {
     const domain = typeof url === 'string' ? domainOf(url) : undefined
-    if (domain !== undefined && found.size < MAX_FOUND) found.set(domain, (found.get(domain) ?? false) || isRead)
+    if (domain === undefined || typeof url !== 'string') return
+    const was = found.get(domain)
+    // A link read out of prose may carry the sentence's closing mark.
+    const page = url.trim().replace(/[.,;:!?)\]]+$/, '').slice(0, MAX_URL)
+    if (was === undefined && found.size < MAX_FOUND) found.set(domain, { domain, isRead, url: page })
+    else if (was !== undefined && isRead && !was.isRead) found.set(domain, { domain, isRead, url: page })
   }
   if (tool === 'WebFetch' || SERVER_FETCH.test(tool)) {
     add(record(result).url ?? input.url, true)
@@ -76,7 +104,7 @@ export function sourcesOf(tool: string, input: Readonly<Record<string, unknown>>
     if (found.size === 0) for (const link of text.match(LINKS) ?? []) add(link, false)
   }
 
-  return [...found].map(([domain, isRead]) => ({ domain, isRead }))
+  return [...found.values()]
 }
 
 /** Every search and read in flight now, of the session and its probes. */
@@ -186,15 +214,18 @@ const WORK: Partial<Record<Action['kind'], ProbeWork>> = { research: 'research',
 
 /**
  * A probe made a call: what it does now, read off the call as the stage
- * reads the agent's own. A call that is none of the three leaves what it did.
+ * reads the agent's own. A call that is none of the three leaves what it
+ * did, and one that does no work, such as keeping a list or handing its
+ * answer back, leaves its last action too.
  */
 export function probeActed(r: Research, id: string, action: Action): Research {
   const was = r.probes.find(p => p.id === id)
   if (was === undefined) return r
   const doing = WORK[action.kind] ?? was.doing
-  const lastAction = clean(action.label)
+  const lastAction = action.kind === 'other' ? '' : clean(action.label)
 
-  return withProbe(r, { ...was, ...(doing === undefined ? {} : { doing }), ...(lastAction === '' ? {} : { lastAction }) })
+  // A call shows the probe at work, even one the session's turn took for finished.
+  return withProbe(r, running({ ...was, ...(doing === undefined ? {} : { doing }), ...(lastAction === '' ? {} : { lastAction }) }))
 }
 
 /** A search or read began, in the session's own loop or in a probe's; a loop no spawn sent out is not the research's. */
@@ -208,16 +239,57 @@ export function callStarted(r: Research, at: number, loop?: string): Research {
   return leveled(r, withProbe(counted, probe), at)
 }
 
+/** A source as first found: its page, whether it was read, and a document's pages. */
+function newSource(f: Found): ResearchSource {
+  return {
+    domain: f.domain,
+    hits: 1,
+    ...(f.isRead ? { isRead: true as const } : {}),
+    ...(f.url === undefined ? {} : { url: f.url }),
+    ...(f.isFile === true ? { isFile: true as const } : {}),
+    ...(f.pages === undefined ? {} : { pages: [f.pages] }),
+  }
+}
+
+/** A source found again: the page read wins over one only found, and a document's pages add up. */
+function againSource(was: ResearchSource, f: Found): ResearchSource {
+  const isRead = f.isRead || was.isRead === true
+  const url = f.isRead && was.isRead !== true ? f.url ?? was.url : was.url ?? f.url
+  const pages = f.pages === undefined || (was.pages ?? []).includes(f.pages) ? was.pages : [...(was.pages ?? []), f.pages].slice(0, MAX_PAGES)
+
+  return {
+    ...was,
+    hits: was.hits + 1,
+    ...(isRead ? { isRead: true as const } : {}),
+    ...(url === undefined ? {} : { url }),
+    ...(pages === undefined ? {} : { pages }),
+  }
+}
+
+/**
+ * The sources with what a call turned up. Past the most a record keeps, a
+ * source that was read takes the place of the one only found, and found
+ * least often, that came last; one only found is left out.
+ */
 function withSources(r: Research, found: readonly Found[]): Research {
   if (found.length === 0) return r
-  const sources: ResearchSource[] = [...r.sources]
+  let sources: ResearchSource[] = [...r.sources]
   let isFull = r.sourcesCapped === true
   for (const f of found) {
     const at = sources.findIndex(s => s.domain === f.domain)
     const was = sources[at]
-    if (was !== undefined) sources[at] = { ...was, hits: was.hits + 1, ...(f.isRead || was.isRead === true ? { isRead: true as const } : {}) }
-    else if (sources.length < MAX_SOURCES) sources.push({ domain: f.domain, hits: 1, ...(f.isRead ? { isRead: true as const } : {}) })
-    else isFull = true
+    if (was !== undefined) {
+      sources[at] = againSource(was, f)
+      continue
+    }
+    if (sources.length < MAX_SOURCES) {
+      sources.push(newSource(f))
+      continue
+    }
+    isFull = true
+    if (!f.isRead) continue
+    const least = sources.reduce((pick, s, i) => (s.isRead !== true && (pick < 0 || s.hits <= (sources[pick]?.hits ?? 0)) ? i : pick), -1)
+    if (least >= 0) sources = [...sources.slice(0, least), ...sources.slice(least + 1), newSource(f)]
   }
 
   return { ...r, sources, ...(isFull ? { sourcesCapped: true as const } : {}) }
@@ -285,8 +357,12 @@ function isProbe(value: unknown): value is ResearchProbe {
     (p.doing === undefined || WORKS.has(p.doing)) && (p.lastAction === undefined || typeof p.lastAction === 'string')
 }
 
-const isSource = (value: unknown): value is ResearchSource =>
-  typeof record(value).domain === 'string' && isNumber(record(value).hits)
+const isSource = (value: unknown): value is ResearchSource => {
+  const s = record(value)
+
+  return typeof s.domain === 'string' && isNumber(s.hits) && (s.url === undefined || typeof s.url === 'string') &&
+    (s.pages === undefined || (Array.isArray(s.pages) && s.pages.every(p => typeof p === 'string')))
+}
 
 const isSample = (value: unknown): value is ConcurrencySample => isNumber(record(value).at) && isNumber(record(value).n)
 

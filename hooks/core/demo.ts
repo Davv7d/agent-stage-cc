@@ -181,6 +181,9 @@ const QUESTIONS = [
   { label: 'What warranties promise, again', from: 19, to: 28 },
 ]
 
+/** Invented paths of the pages the demo's sources point to. */
+const PAGES = ['reports', 'study', 'data', 'faq', 'guide', 'news']
+
 /** Invented domains under the name reserved for examples. */
 const DOMAINS = [
   'cell-journal', 'grid-stats', 'ev-forum', 'chem-review', 'lab-notes', 'energy-wiki', 'field-data', 'warranty-db',
@@ -233,12 +236,18 @@ export function demoResearchSnapshot(tick: number, now: number): Snapshot {
 
     return [isRunning ? { ...base, status: 'running' as const } : { ...base, status: q.isFailed === true ? 'failed' as const : 'done' as const, endedAt: now - (t - q.to) * TICK_MS }]
   })
-  const sources: ResearchSource[] = DOMAINS.slice(0, foundBy(t)).map((domain, i) => {
+  const web: ResearchSource[] = DOMAINS.slice(0, foundBy(t)).map((domain, i) => {
     const since = Array.from({ length: t + 1 }, (_, k) => k).find(k => foundBy(k) > i) ?? t
-    const isRead = i % 3 === 0 || (t >= 29 && i % 3 === 1)
+    const isRead = i % 4 === 0 || (t >= 29 && i % 8 === 2)
+    const url = `https://${domain}/${PAGES[i % PAGES.length] ?? 'report'}/home-batteries-${2019 + (i % 6)}`
 
-    return { domain, hits: Math.min(6, 1 + Math.floor((t - since) / 5)), ...(isRead ? { isRead: true as const } : {}) }
+    return { domain, hits: Math.min(6, 1 + Math.floor((t - since) / 5)), url, ...(isRead ? { isRead: true as const } : {}) }
   })
+  // The person handed a document of their own over at the start; it is read first, and again to check.
+  const handbook: ResearchSource[] = t < 4 ? [] : [{
+    domain: 'battery-handbook.pdf', hits: t < 30 ? 1 : 2, isRead: true, isFile: true, url: 'docs/battery-handbook.pdf', pages: t < 30 ? ['12-14'] : ['12-14', '31'],
+  }]
+  const sources = [...handbook, ...web]
   // What ran at once: each tick holds its level for the time it stands for.
   const tickAt = (time: number) => t - Math.floor((now - time) / TICK_MS)
   const end = Math.floor(now / BUCKET_MS) * BUCKET_MS

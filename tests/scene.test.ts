@@ -351,3 +351,14 @@ test('a name in the queue stops short of the ring it waits for', async () => {
   const halfName = (QUEUE_NAME_MAX * 6.3) / 2
   expect(first[0] + halfName).toBeLessThan(ring.center[0] - RING_OUTER - 4)
 })
+
+test('the team is drawn anew when a subagent starts or stops, or a title arrives, though nothing else changed', async () => {
+  const first = advance(null, shot(agent('a', 'research')))
+  const sent = advance(first, shot(agent('a', 'research', withProbes(probe('s1', 'research'), probe('s2', 'coding')))))
+  expect(sent).not.toBe(first)
+  expect(sent.agents[0]?.subagents?.length).toBe(2)
+  const back = advance(sent, shot(agent('a', 'research', withProbes(probe('s1', 'research', { status: 'done', endedAt: 1 }), probe('s2', 'coding')))))
+  expect(back.agents[0]?.subagents?.map(s => s.id)).toEqual(['s2'])
+  const titled = advance(back, shot(agent('a', 'research', { title: 'Billing: CSV export', ...withProbes(probe('s2', 'coding')) })))
+  expect(titled.agents[0]?.title).toBe('Billing: CSV export')
+})

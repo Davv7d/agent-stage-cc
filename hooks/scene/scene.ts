@@ -164,7 +164,7 @@ function planRows(a: SceneAgent, o: SceneOptions): string[] {
   const { done, total, near } = glance(plan)
   const mark = { done: '✓', active: '▸', pending: '·' } as const
 
-  return [WORDS[o.lang].stepsDone(done, total), ...near.map(s => `${mark[s.status]} ${shorten(s.text, 34)}`)]
+  return [WORDS[o.lang].stepsDone(done, total), ...near.map(s => `${mark[s.status]} ${cut(s.text, 34)}`)]
 }
 
 /** The subagents at work in a hover card: how many, and what the first few do. */
@@ -252,7 +252,7 @@ export function card(a: SceneAgent, at: Point, layout: { width: number }, o: Sce
     ...(a.title === undefined ? [] : [`${w.worktree}: ${shorten(a.id, 30)}`]),
     ...(a.mode === undefined ? [] : [`${w.mode}: ${shorten(a.mode, 30)}`]),
     ...(a.branch === null ? [] : [`${w.branch}: ${shorten(a.branch, 30)}`]),
-    ...(a.lastAction === '' ? [] : [`${w.last}: ${shorten(a.lastAction, 30)}`]),
+    ...(a.lastAction === '' ? [] : [`${w.last}: ${cut(a.lastAction, 30)}`]),
     ...(a.prUrl === undefined ? [] : [shorten(a.prUrl.replace(/^https?:\/\//, ''), 36)]),
     ...(a.usage === undefined ? [] : [`CPU ${usageText(a.usage, cores).replace(' · ', ' · RAM ')}`]),
     ...planRows(a, o),

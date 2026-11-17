@@ -5,10 +5,11 @@ const TOP = '/repo/.claude/worktrees/topic-scan'
 const FILE = '/repo/.git/agent-stage-cc/agents/topic-scan.json'
 
 // A file system and a git in memory, as in the plugin's other tests; every write is counted.
-function machine(on: On) {
+function machine(on: On, beforeWrite: (path: string) => Promise<void> | undefined = () => undefined) {
   const files = new Map<string, string>()
   const writes: string[] = []
-  on('fs.write', (_, e) => {
+  on('fs.write', async (_, e) => {
+    await beforeWrite(e.path)
     files.set(e.path, e.text)
     writes.push(e.path)
 
@@ -86,7 +87,7 @@ test('a spawn sends a probe out; its calls, its sources and its end reach the re
   await $.tool.call({ ...SEARCH, agentId: 'sub-1' } as never)
   await clock.advance(1000)
   expect(research().probes[0].calls).toBe(1)
-  expect(research().sources).toEqual([{ domain: 'cells.example', hits: 1 }, { domain: 'grid.example', hits: 1 }])
+  expect(research().sources).toEqual([{ domain: 'cells.example', hits: 1, url: 'https://www.cells.example/a' }, { domain: 'grid.example', hits: 1, url: 'https://grid.example/b' }])
   // The probe's own turn ends: it is done, and the stage is told at once.
   await $.turn.complete({ answer: 'Findings: ...', reason: 'answer', durationMs: 1, isAborted: false, turnId: 't2', agentId: 'sub-1' } as never)
   expect(research().probes[0].status).toBe('done')
@@ -222,4 +223,49 @@ test('the session title the app gives reaches the record, and follows a rename',
   // A prompt without a title leaves the one the session has.
   await $.classic.UserPromptSubmit({ prompt: 'go on' })
   expect(title()).toBe('Shop: checkout and invoices')
+})
+
+test('a test run the person stops is not a failed one', async ($, on) => {
+  mock.clock(on, { now: 1_000_000 })
+  mock.env(on, { HOME: '/home/me' })
+  const { files } = machine(on)
+  on('tool.call', (_, e) => {
+    if (e.tool === 'Bash') throw new Error('interrupted')
+
+    return { result: {} }
+  })
+  const state = () => JSON.parse(files.get(FILE) ?? '{}').state
+
+  await $.session.start({ cwd: TOP, surface: 'desktop', isInteractive: true })
+  await $.turn.start({ text: 'run the tests', turnId: 't1' })
+  await $.tool.call({ tool: 'Bash', command: 'npm test' } as never).catch(() => undefined)
+  expect(state()).not.toBe('failed')
+})
+
+test('a title that arrives while a save is under way is in the file when the next turn reads it back', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.env(on, { HOME: '/home/me' })
+  let hold = false
+  let open: () => void = () => undefined
+  const gate = new Promise<void>(resolve => (open = resolve))
+  // Writes of the agent's file wait at the gate while it is held.
+  const { files } = machine(on, path => (hold && path.startsWith(FILE) ? gate : undefined))
+  on('classic.UserPromptSubmit', () => ({}))
+  on('tool.call', () => ({ result: {} }))
+
+  await $.session.start({ cwd: TOP, surface: 'desktop', isInteractive: true })
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.agent.spawn({ prompt: 'p', description: 'One' } as never)
+  await clock.advance(5000)
+  hold = true
+  // A probe's search starts a save that waits at the gate; the title and the next turn come meanwhile.
+  const search = $.tool.call({ tool: 'WebSearch', query: 'q', agentId: 'sub-1' } as never)
+  await clock.advance(10)
+  const titled = $.classic.UserPromptSubmit({ prompt: 'next', session_title: 'Shop: checkout in one step' })
+  const turned = $.turn.start({ text: 'next', turnId: 't2' })
+  await clock.advance(10)
+  open()
+  await Promise.all([search, titled, turned])
+  await clock.advance(2000)
+  expect(JSON.parse(files.get(FILE) ?? '{}').title).toBe('Shop: checkout in one step')
 })

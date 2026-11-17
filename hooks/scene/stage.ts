@@ -55,6 +55,9 @@ const toScene = (a: AgentView, isQueued: boolean, usage: UsageReport | null = nu
   ...subagentsOf(a),
 })
 
+/** What of an agent's subagents the drawing shows: which there are, what each does, how many searches run. */
+const satellitesOf = (a: SceneAgent) => (a.subagents ?? []).map(s => [s.id, s.label, s.doing ?? 0, Math.min(s.inFlight, 3)])
+
 /** The subagents an agent has at work now, as the team's scene draws them. */
 function subagentsOf(a: AgentView): { subagents?: SceneSubagent[] } {
   const running = (a.research?.probes ?? []).filter(p => p.status === 'running')
@@ -228,16 +231,16 @@ export function advance(
   const agents = shot.agents.filter(a => a !== lead).map(a => toScene(a, queue.includes(a.id), usage))
   const fresh: UsageLevels | null = usage === null ? null : levelsOf(usage)
   const facts = JSON.stringify([
-    coordinator === null ? null : [coordinator.id, coordinator.state, coordinator.mode ?? 0],
-    agents.map(a => [a.id, a.state, a.isAsleep, a.promptAt, a.prUrl ?? '', a.plan === undefined ? 0 : glance(a.plan), a.mode ?? 0]),
+    coordinator === null ? null : [coordinator.id, coordinator.state, coordinator.mode ?? 0, coordinator.title ?? 0, satellitesOf(coordinator)],
+    agents.map(a => [a.id, a.state, a.isAsleep, a.promptAt, a.prUrl ?? '', a.plan === undefined ? 0 : glance(a.plan), a.mode ?? 0, a.title ?? 0, satellitesOf(a)]),
     resource,
-    planned === undefined ? 0 : [planned.id, planned.state, planned.isAsleep, planned.plan?.map(s => s.status[0] + s.text), planned.mode ?? 0],
+    planned === undefined ? 0 : [planned.id, planned.state, planned.isAsleep, planned.plan?.map(s => s.status[0] + s.text), planned.mode ?? 0, planned.title ?? 0],
     researched === undefined || found === undefined
       ? 0
       : [
-          researched.id, researched.state, researched.isAsleep, researched.mode ?? 0, researched.plan?.map(s => s.status[0] + s.text) ?? 0,
+          researched.id, researched.state, researched.isAsleep, researched.mode ?? 0, researched.plan?.map(s => s.status[0] + s.text) ?? 0, researched.title ?? 0,
           found.probes.map(p => [p.id, p.label, p.status, p.inFlight, p.calls]), found.inFlight, found.calls,
-          found.sources.map(s => [s.domain, s.hits, s.isRead === true ? 1 : 0]), found.sourcesCapped === true ? 1 : 0,
+          found.sources.map(s => [s.domain, s.hits, s.isRead === true ? 1 : 0, s.url ?? '', s.pages ?? 0]), found.sourcesCapped === true ? 1 : 0,
           found.peak, seriesOf(found, now),
         ],
   ])

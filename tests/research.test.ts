@@ -8,6 +8,7 @@ import { apply } from '../hooks/core/reduce'
 import type { StageEvent } from '../hooks/core/reduce'
 import {
   BUCKET_MS,
+  documentOf,
   domainOf,
   emptyResearch,
   HISTORY_MS,
@@ -117,16 +118,22 @@ test('domains are read from fetched pages and search results, each once', async 
   expect(domainOf('https://www.Example.org/a?b=1')).toBe('example.org')
   expect(domainOf('http://user@docs.example.net:8080/x')).toBe('docs.example.net')
   expect(['ftp://x.example/a', 'not a url', 'https://localhost/x', ''].map(domainOf)).toEqual([undefined, undefined, undefined, undefined])
-  expect(sourcesOf('WebFetch', { url: 'https://a.example/page' }, { url: 'https://www.a.example/page', code: 200 }, '')).toEqual([{ domain: 'a.example', isRead: true }])
+  // Each keeps its exact page: the one read, or the first a search gave.
+  expect(sourcesOf('WebFetch', { url: 'https://a.example/page' }, { url: 'https://www.a.example/page', code: 200 }, '')).toEqual([{ domain: 'a.example', isRead: true, url: 'https://www.a.example/page' }])
   const results = { query: 'q', results: [{ tool_use_id: 't', content: [{ title: 'A', url: 'https://a.example/1' }, { title: 'B', url: 'https://b.example/2' }, { title: 'A2', url: 'https://a.example/3' }] }, 'a note'] }
-  expect(sourcesOf('WebSearch', { query: 'q' }, results, '')).toEqual([{ domain: 'a.example', isRead: false }, { domain: 'b.example', isRead: false }])
-  // Without the tool's record, the links in what the model read.
-  expect(sourcesOf('WebSearch', { query: 'q' }, undefined, 'Links: [{"url":"https://c.example/x"}] and https://d.example.')).toEqual([
-    { domain: 'c.example', isRead: false },
-    { domain: 'd.example', isRead: false },
+  expect(sourcesOf('WebSearch', { query: 'q' }, results, '')).toEqual([
+    { domain: 'a.example', isRead: false, url: 'https://a.example/1' },
+    { domain: 'b.example', isRead: false, url: 'https://b.example/2' },
   ])
-  expect(sourcesOf('mcp__docs__search_pages', {}, undefined, 'see https://e.example/p')).toEqual([{ domain: 'e.example', isRead: false }])
+  // Without the tool's record, the links in what the model read, without the sentence's closing mark.
+  expect(sourcesOf('WebSearch', { query: 'q' }, undefined, 'Links: [{"url":"https://c.example/x"}] and https://d.example.')).toEqual([
+    { domain: 'c.example', isRead: false, url: 'https://c.example/x' },
+    { domain: 'd.example', isRead: false, url: 'https://d.example' },
+  ])
+  expect(sourcesOf('mcp__docs__search_pages', {}, undefined, 'see https://e.example/p')).toEqual([{ domain: 'e.example', isRead: false, url: 'https://e.example/p' }])
+  // A file read is a source only when it is a document, never for the links in it.
   expect(sourcesOf('Read', { file_path: '/x' }, undefined, 'https://f.example')).toEqual([])
+  expect(sourcesOf('Read', { file_path: '/repo/src/app.ts' }, undefined, '')).toEqual([])
 })
 
 test('sources pile up by domain, read ones marked, and the shelf has an end', async () => {
@@ -219,13 +226,71 @@ test('a probe shows what it does now: reading, editing or testing, and its last 
   expect([research(rec).probes[0]?.doing, research(rec).probes[0]?.lastAction]).toEqual(['coding', 'Edit schema.ts'])
   rec = run(rec, [act(1200, 'p1', 'Bash', { command: 'npm test' })])
   expect(research(rec).probes[0]?.doing).toBe('testing')
-  // A call that is none of the three keeps what the probe did, and names the call.
-  rec = run(rec, [act(1300, 'p1', 'TodoWrite', {})])
-  expect([research(rec).probes[0]?.doing, research(rec).probes[0]?.lastAction]).toEqual(['testing', 'TodoWrite'])
+  // A call that does no work, such as keeping a list or handing the answer back, hides nothing it did.
+  rec = run(rec, [act(1300, 'p1', 'TodoWrite', {}), act(1310, 'p1', 'SubagentHandback', {})])
+  expect([research(rec).probes[0]?.doing, research(rec).probes[0]?.lastAction]).toEqual(['testing', '$ npm test'])
   // A loop nobody sent out is not drawn as anything.
   expect(research(run(rec, [act(1400, 'fork', 'Edit', { file_path: '/x' })])).probes.map(p => p.id)).toEqual(['p1'])
   // What it did survives a read back from the file; a value this version cannot read drops the research.
   expect(mend(JSON.parse(JSON.stringify(rec))).research?.probes[0]?.doing).toBe('testing')
   const odd = { ...rec, research: { ...research(rec), probes: [{ ...research(rec).probes[0], doing: 'dancing' }] } } as unknown as AgentRecord
   expect(mend(odd).research).toBe(undefined)
+})
+
+test("a document of the person's is a source with its pages; a page read wins over one found", async () => {
+  expect(documentOf({ file_path: '/home/me/docs/Manual.pdf', pages: '12-14' })).toEqual({ domain: 'Manual.pdf', isRead: true, url: '/home/me/docs/Manual.pdf', isFile: true, pages: '12-14' })
+  expect(documentOf({ file_path: 'notes/guide.md' })).toEqual({ domain: 'guide.md', isRead: true, url: 'notes/guide.md', isFile: true })
+  const read = (at: number, file: string, pages?: string): StageEvent => ({
+    kind: 'tool-end', at, action: READ, isError: false, isSearch: true, loop: 'p1',
+    found: [{ domain: file, isRead: true, url: `/docs/${file}`, isFile: true, ...(pages === undefined ? {} : { pages }) }],
+  })
+  let rec = run(fresh(), [spawn(1000, 'p1', 'Read the manual'), search(1100, 'p1'), read(1200, 'Manual.pdf', '12-14'), search(1300, 'p1'), read(1400, 'Manual.pdf', '20'), search(1500, 'p1'), read(1600, 'Manual.pdf', '12-14')])
+  expect(research(rec).sources).toEqual([{ domain: 'Manual.pdf', hits: 3, isRead: true, url: '/docs/Manual.pdf', isFile: true, pages: ['12-14', '20'] }])
+  // A domain first only found keeps that page until a page of it is read.
+  const page = (at: number, url: string, isRead: boolean): StageEvent => ({
+    kind: 'tool-end', at, action: READ, isError: false, isSearch: true, found: [{ domain: 'a.example', isRead, url }],
+  })
+  rec = run(fresh(), [{ kind: 'research-watch', at: 1000 }, search(1100), page(1200, 'https://a.example/found', false), search(1300), page(1400, 'https://a.example/read', true), search(1500), page(1600, 'https://a.example/other', false)])
+  expect(research(rec).sources[0]?.url).toBe('https://a.example/read')
+})
+
+test('a full shelf makes room for a source read, never for one only found', async () => {
+  const many = Array.from({ length: MAX_SOURCES }, (_, i) => ({ domain: `d${i}.example`, isRead: false, url: `https://d${i}.example/` }))
+  const end = (at: number, found: StageEvent extends never ? never : { domain: string; isRead: boolean; url?: string }[]): StageEvent => ({ kind: 'tool-end', at, action: READ, isError: false, isSearch: true, found })
+  let rec = run(fresh(), [{ kind: 'research-watch', at: 1000 }, search(1100), end(1200, many)])
+  // d0 is found twice: it outranks the rest, which were found once.
+  rec = run(rec, [search(1300), end(1400, [{ domain: 'd0.example', isRead: false }])])
+  expect(research(rec).sources.length).toBe(MAX_SOURCES)
+  rec = run(rec, [search(1500), end(1600, [{ domain: 'new.example', isRead: false, url: 'https://new.example/' }])])
+  expect(research(rec).sources.some(s => s.domain === 'new.example')).toBe(false)
+  expect(research(rec).sourcesCapped).toBe(true)
+  rec = run(rec, [search(1700), end(1800, [{ domain: 'read.example', isRead: true, url: 'https://read.example/page' }])])
+  const domains = research(rec).sources.map(s => s.domain)
+  expect(domains.length).toBe(MAX_SOURCES)
+  expect(domains).toContain('read.example')
+  expect(domains).toContain('d0.example')
+  // The one that went was found least often, and last among those.
+  expect(domains).not.toContain(`d${MAX_SOURCES - 1}.example`)
+})
+
+test('a new order starts the research anew where no plan carries it, unless some still runs', async () => {
+  const done = run(fresh(), [spawn(1000, 'p1', 'One'), search(1100, 'p1'), found(1200, 'p1', ['a.example']), { kind: 'probe-end', at: 1300, id: 'p1', reason: 'answer' }])
+  expect(research(done).sources.length).toBe(1)
+  // No plan, nothing running: the next prompt starts from an empty research.
+  const next = run(done, [{ kind: 'turn-start', at: 2000 }])
+  expect(research(next).probes).toEqual([])
+  expect(research(next).sources).toEqual([])
+  // Still running in the background: kept.
+  const busy = run(fresh(), [spawn(1000, 'bg', 'Back', true)])
+  expect(research(run(busy, [{ kind: 'turn-start', at: 2000 }])).probes.map(p => p.id)).toEqual(['bg'])
+  // A plan under way carries it from turn to turn.
+  const planned = run(done, [{ kind: 'plan-call', at: 1400, tool: 'TodoWrite', input: { todos: [{ content: 'Gather', status: 'in_progress', activeForm: 'x' }, { content: 'Report', status: 'pending', activeForm: 'y' }] } }])
+  expect(research(run(planned, [{ kind: 'turn-start', at: 2000 }])).sources.length).toBe(1)
+})
+
+test("a probe the session's turn took for finished is at work again with its next call", async () => {
+  const rec = run(fresh(), [spawn(1000, 'inner', 'Nested'), { kind: 'turn-end', at: 2000, answer: 'ok', reason: 'answer' }])
+  expect(research(rec).probes[0]?.status).toBe('done')
+  const again = run(rec, [{ kind: 'tool-start', at: 2100, action: classify('Edit', { file_path: '/w/a.ts' }), loop: 'inner' }])
+  expect([research(again).probes[0]?.status, research(again).probes[0]?.doing]).toEqual(['running', 'coding'])
 })

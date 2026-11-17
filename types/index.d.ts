@@ -92,13 +92,20 @@ export type ResearchProbe = {
   endedAt?: number
 }
 
-/** One domain the research found or read. */
+/** One domain the research found or read, or one document of the person's it read. */
 export type ResearchSource = {
+  /** A web page's domain, or a document's file name. */
   domain: string
   /** How often a page of it was found or read. */
   hits: number
   /** A page of it was fetched, not only found among search results. */
   isRead?: true
+  /** The exact page, the one read before any one only found; for a document, its path. */
+  url?: string
+  /** A document of the person's, read from disk, not a web page. */
+  isFile?: true
+  /** The pages of a document that were read, as the read asked for them. */
+  pages?: string[]
 }
 
 /** The most searches and reads in flight at once in the ten seconds from `at`. */

@@ -70,6 +70,12 @@ type ResearchWords = {
   /** A subagent known only by its calls. */
   unnamed: string
   tile: (domain: string, hits: number, isRead: boolean) => string
+  /** In a source's card: what kind it is, whether it was read, and how often it came up. */
+  sourceLine: (hits: number, isRead: boolean, isFile: boolean) => string
+  /** A document's pages that were read. */
+  pages: (list: string) => string
+  /** Beside the shelf's caption: how many sources were read. */
+  readCount: (n: number) => string
 }
 
 /**
@@ -154,6 +160,9 @@ export const WORDS: Record<Lang, Words> = {
         `probes: running ${running} · done ${done}${stopped > 0 ? ` · stopped ${stopped}` : ''}${failed > 0 ? ` · failed ${failed}` : ''} · calls ${calls}`,
       unnamed: 'subagent',
       tile: (domain, hits, isRead) => `${domain} · ${isRead ? 'read' : 'found'} · ${hits}×`,
+      sourceLine: (hits, isRead, isFile) => `${isFile ? 'document · ' : ''}${isRead ? 'read' : 'found in search results'} · ${hits}×`,
+      pages: list => `pages ${list}`,
+      readCount: n => `read ${n}`,
     },
   },
   pl: {
@@ -223,6 +232,9 @@ export const WORDS: Record<Lang, Words> = {
         `sondy: w toku ${running} · gotowe ${done}${stopped > 0 ? ` · przerwane ${stopped}` : ''}${failed > 0 ? ` · błędy ${failed}` : ''} · wywołania ${calls}`,
       unnamed: 'subagent',
       tile: (domain, hits, isRead) => `${domain} · ${isRead ? 'przeczytane' : 'znalezione'} · ${hits}×`,
+      sourceLine: (hits, isRead, isFile) => `${isFile ? 'dokument · ' : ''}${isRead ? 'przeczytane' : 'znalezione w wynikach'} · ${hits}×`,
+      pages: list => `strony ${list}`,
+      readCount: n => `przeczytane ${n}`,
     },
   },
 }

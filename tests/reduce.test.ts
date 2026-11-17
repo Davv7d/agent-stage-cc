@@ -136,3 +136,19 @@ test('the session title names the agent, until another session takes the worktre
   expect(mend({ ...rec, title: 42 } as unknown as AgentRecord).title).toBe(undefined)
   expect(mend(rec).title).toBe('Billing: CSV export for accountants')
 })
+
+test("a subagent's calls move the agent while its turn runs, not once it rests, and never take its last action", async () => {
+  const sub = (kind: ActionKind, at: number, label: string = kind): StageEvent => ({ kind: 'tool-start', at, action: { kind, label }, loop: 'p1' })
+  const working = run(fresh(), [{ kind: 'turn-start', at: 2000 }, start('research', 2100)])
+  // Its turn runs: a subagent's edit shows as the agent's work, but the agent's last action stays its own.
+  const moved = run(working, [sub('coding', 2200, 'Edit x.ts')])
+  expect(moved.state).toBe('coding')
+  expect(moved.lastAction).toBe('research')
+  // At rest after its turn, a subagent in the background leaves it resting.
+  const resting = run(working, [turnEnd(3000, 'Done.')])
+  expect(resting.state).toBe('idle')
+  expect(run(resting, [sub('coding', 3100), sub('test', 3200), { kind: 'tool-end', at: 3300, action: act('test'), isError: true, loop: 'p1' }]).state).toBe('idle')
+  // Unless it opens a pull request: that is the agent's.
+  const opened = run(resting, [sub('pr-create', 3400), { kind: 'tool-end', at: 3500, action: act('pr-create'), isError: false, output: 'https://example.com/o/r/pull/7', loop: 'p1' }])
+  expect([opened.state, opened.pr?.url]).toEqual(['pr', 'https://example.com/o/r/pull/7'])
+})

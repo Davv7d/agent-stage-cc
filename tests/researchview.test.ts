@@ -7,7 +7,7 @@ import { emptyResearch, MAX_PROBES, MAX_SOURCES } from '../hooks/core/research'
 import { plPlural } from '../hooks/scene/labels'
 import { fitResearch, LABEL_REACH, ORBIT_PLACES } from '../hooks/scene/layout'
 import { neon } from '../hooks/scene/neon'
-import { counterText, renderResearch, researchRows, wrap } from '../hooks/scene/research'
+import { counterText, ranked, renderResearch, researchRows, wrap } from '../hooks/scene/research'
 import { describeScene, MAX_SOURCE } from '../hooks/scene/scene'
 import { ASK, BAD } from '../hooks/scene/skin'
 import { advance, ORBIT_SLOTS, researchAgent } from '../hooks/scene/stage'
@@ -157,7 +157,10 @@ test('the research scene fits the element, however many probes and sources', asy
   const probes = Array.from({ length: MAX_PROBES }, (_, i) => probe(`p${i}`, i % 3 === 0 ? 'running' : 'done', {
     label: `${'Which of the many sources </svg> agree on this & that '.repeat(3)}${i}`, inFlight: i % 3 === 0 ? 50 : 0, calls: 999,
   }))
-  const sources = Array.from({ length: MAX_SOURCES }, (_, i) => ({ domain: `${i}.${long}`, hits: 99, isRead: true as const }))
+  // Every source with the longest address and pages a record keeps, its hover card included.
+  const sources = Array.from({ length: MAX_SOURCES }, (_, i) => ({
+    domain: `${i}.${long}`, hits: 99, isRead: true as const, url: `https://${i}.${long}/${'path/'.repeat(60)}`.slice(0, 300), pages: ['1-2', '3', '40-41', '7', '9', '12'],
+  }))
   const history = Array.from({ length: 60 }, (_, i) => ({ at: i * 10_000, n: 99 }))
   const stage = advance(null, shot(agent('a-very-long-worktree-name-for-research', 'research', {
     mode: 'research', plan: plan('ddaaa'), research: research({ inFlight: 50, probes, sources, sourcesCapped: true, history, peak: 99, peakAt: 0 }),
@@ -222,7 +225,9 @@ test('a surface without a vector element gets the same facts as text', async () 
     '! subagent · failed · 5 calls',
     '✓ Question p1 · done · 5 calls',
     'peak 6',
-    'sources: a.example, b.example',
+    // A source read comes first, with where it stands; the ones only found follow.
+    '✓ a.example',
+    'sources: b.example',
   ])
   expect(rows[2]?.tone).toBe('bad')
   expect(researchRows(scene, 'pl')[1]?.text).toBe('▸ Question p2 · 3 w toku · 12 wywołań')
@@ -255,4 +260,31 @@ test('the demo researcher asks, sends probes out, finishes, and its sources pile
   expect(most).toBe(5)
   expect(sources).toBeGreaterThan(20)
   expect(isPink).toBe(true)
+})
+
+test('the sources read, where something was found, stand first and marked, each with its exact address on hover', async () => {
+  const sources = [
+    { domain: 'found-once.example', hits: 1, url: 'https://found-once.example/a' },
+    { domain: 'found-often.example', hits: 4, url: 'https://found-often.example/b' },
+    { domain: 'read.example', hits: 2, isRead: true as const, url: 'https://read.example/the/exact/page?q=1' },
+    { domain: 'Manual.pdf', hits: 1, isRead: true as const, url: '/home/me/docs/Manual.pdf', isFile: true as const, pages: ['12-14', '20'] },
+  ]
+  expect(ranked(sources).map(s => s.domain)).toEqual(['read.example', 'Manual.pdf', 'found-often.example', 'found-once.example'])
+  const stage = advance(null, shot(agent('a', 'research', { mode: 'research', research: research({ sources }) })))
+  const svg = draw(stage)
+  // Read ones first on the shelf, and marked: a dot for a page, a square for a document.
+  const order = ['read.example', 'Manual.pdf', 'found-often.example', 'found-once.example'].map(d => svg.indexOf(`>${d}<`))
+  expect(order.every((x, i) => x > 0 && (i === 0 || x > (order[i - 1] ?? 0)))).toBe(true)
+  expect(svg).toContain('SOURCES · 4 · read 2')
+  // The hover card gives the exact address, and a document's pages.
+  expect(svg).toContain('https://read.example/the/exact/page?q=1')
+  expect(svg).toContain('/home/me/docs/Manual.pdf')
+  expect(svg).toContain('document · read · 1×')
+  expect(svg).toContain('pages 12-14, 20')
+  expect(svg).toContain('found in search results · 4×')
+  expect(draw(stage, 140, 40, 'pl')).toContain('strony 12-14, 20')
+  // As text, the read ones come with where they stand.
+  const scene = stage.research
+  if (scene === null || scene === undefined) throw new Error('no research')
+  expect(researchRows(scene, 'en').map(r => r.text)).toContain('✓ /home/me/docs/Manual.pdf · pages 12-14, 20')
 })

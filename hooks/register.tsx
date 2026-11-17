@@ -157,7 +157,8 @@ type Self = {
   title: string | undefined
   isFlushDue: boolean
   /** A save is under way, and the record changed again meanwhile. */
-  isSaving: boolean
+  /** The save under way, if any; a change made meanwhile sets `isDirty`. */
+  saving: Promise<void> | null
   isDirty: boolean
   isLocated: boolean
   /** What the views last got, so an unchanged poll redraws nothing. */
@@ -254,14 +255,13 @@ async function locateSelf($: EngineInterface, self: Self, at: number): Promise<v
   }
   const sessionId = await $.session.id()
   const stored = await load($, self.who.stateDir, self.who.id)
-  // This session's research in memory may be ahead of the file, which is written at most once a second.
-  const kept = self.rec !== undefined && self.rec.id === self.who.id && self.rec.sessionId === stored?.sessionId ? self.rec.research : undefined
-  self.rec = {
-    ...(stored ?? newRecord(self.who, sessionId, at)),
-    worktree: self.who.worktree,
-    branch: self.who.branch,
-    ...(kept === undefined ? {} : { research: kept }),
-  }
+  // Only this session writes its record, and what it holds may be ahead of
+  // the file: a write still under way, research written once a second. It is
+  // read from the file only when this session holds none, or another session
+  // took the worktree since.
+  const isOwn = self.rec !== undefined && self.rec.id === self.who.id && self.rec.sessionId === (stored?.sessionId ?? self.rec.sessionId)
+  const base = isOwn && self.rec !== undefined ? self.rec : (stored ?? newRecord(self.who, sessionId, at))
+  self.rec = { ...base, worktree: self.who.worktree, branch: self.who.branch }
 }
 
 async function emit(
@@ -305,22 +305,29 @@ async function store($: EngineInterface, self: Self, at: number): Promise<void> 
   self.written = JSON.stringify(core)
   self.researchWritten = JSON.stringify(research ?? null)
   self.writtenAt = at
-  if (self.isSaving) {
+  // A save under way writes the latest record again before it settles: wait
+  // for it, so that whoever reads the file next finds this record there.
+  while (self.saving !== null) {
     self.isDirty = true
-
-    return
+    await self.saving
+    if (!self.isDirty) return
   }
-  self.isSaving = true
+  self.saving = saveLatest($, self)
   try {
-    do {
-      self.isDirty = false
-      const [rec, who] = [self.rec, self.who]
-      if (rec === undefined || who === undefined) break
-      await save($, who.stateDir, rec)
-    } while (self.isDirty)
+    await self.saving
   } finally {
-    self.isSaving = false
+    self.saving = null
   }
+}
+
+/** Writes the record, and again for as long as it changed while being written. */
+async function saveLatest($: EngineInterface, self: Self): Promise<void> {
+  do {
+    self.isDirty = false
+    const [rec, who] = [self.rec, self.who]
+    if (rec === undefined || who === undefined) break
+    await save($, who.stateDir, rec)
+  } while (self.isDirty)
 }
 
 /** The research's last change is written once its second is up, so no count is left behind. */
@@ -584,8 +591,9 @@ async function refresh($: EngineInterface, self: Self): Promise<void> {
       await $.fs.write(`${self.who.stateDir}/pane.json`, self.pane)
     }
     const mode = (await read($, viewMode)) ?? self.config.view
-    // A pane held to the research keeps the record of it from now on.
-    if (mode === 'research' && !self.isDemo && self.rec !== undefined && self.rec.research === undefined) {
+    // A pane that shows the research keeps the record of it from now on: held
+    // to it, or left to a mode that is watched on it.
+    if ((mode === 'research' || self.mode?.view === 'research') && !self.isDemo && self.rec !== undefined && self.rec.research === undefined) {
       await emit($, self, at => ({ kind: 'research-watch', at }))
     }
     let next: Snapshot
@@ -693,7 +701,7 @@ async function resourceAction(
 export const register: Register = on => {
   const self: Self = {
     who: undefined, rec: undefined, written: '', writtenAt: 0, isLocated: false,
-    researchWritten: 'null', title: undefined, isFlushDue: false, isSaving: false, isDirty: false,
+    researchWritten: 'null', title: undefined, isFlushDue: false, saving: null, isDirty: false,
     shown: '', stage: null, polls: 0, isDemo: false, demoKind: 'team', mode: null, isModeDefault: false, projectMode: undefined, cwd: '', rules: null, lang: 'en', systemLang: 'en', utcOffsetMinutes: 0,
     pane: '', paneWritten: '', images: null, config: DEFAULTS, patterns: DEFAULT_PATTERNS, last: null, briefShown: '',
     machine: undefined, cpuSeconds: null, system: null, sampledAt: 0, containers: {}, usage: null, limits: [], sessionId: '', trouble: '',
@@ -819,8 +827,9 @@ export const register: Register = on => {
     try {
       ran = await next(e)
     } catch (error) {
-      // A call that broke off still ends: nothing stays counted as running.
-      await emit($, self, at => ({ kind: 'tool-end', at, action, isError: true, ...where }))
+      // A call that broke off still ends, so nothing stays counted as running;
+      // broken off, as when the person stops a test run, is not failed.
+      await emit($, self, at => ({ kind: 'tool-end', at, action, isError: false, ...where }))
       throw error
     }
     const isError = ran.deny !== undefined || ran.isError === true

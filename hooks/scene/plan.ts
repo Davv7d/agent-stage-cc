@@ -2,7 +2,7 @@ import { progressOf } from '../core/plan'
 import type { PlanScene, SceneStep, Stage, StepPlace } from '../../types'
 import { WORDS } from './labels'
 import type { PlanLayout, Point } from './layout'
-import { card, esc, frame, gauges, meters, move, n1, nameOf, ring, shorten } from './scene'
+import { card, cut, esc, frame, gauges, meters, move, n1, nameOf, ring, shorten } from './scene'
 import type { SceneOptions } from './scene'
 import { ASK, BAD, colorOf } from './skin'
 import type { Skin } from './skin'
@@ -62,7 +62,7 @@ function stepBall(step: SceneStep, place: StepPlace, scene: PlanScene, color: st
   const inside = place.zone === 'done' || place.zone === 'gate'
     ? `<path d="${CHECK}" fill="none" stroke="${tone}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`
     : `<text y="${isActive ? 4.5 : 3.5}" class="t" font-size="${isActive ? 12 : 9.5}" font-weight="600" text-anchor="middle" fill="${isActive ? tone : '#9aa5b8'}">${step.ordinal}</text>`
-  const label = `<text y="${radius + 15}" class="t ${isActive ? 'nm' : 'st'}" text-anchor="middle"${isActive ? ' fill="#e7ebf2"' : ''}>${esc(shorten(step.text, nameMax))}</text>`
+  const label = `<text y="${radius + 15}" class="t ${isActive ? 'nm' : 'st'}" text-anchor="middle"${isActive ? ' fill="#e7ebf2"' : ''}>${esc(cut(step.text, nameMax))}</text>`
 
   return `${glow}${wave}<circle r="${radius}" fill="#0f1420" stroke="${tone}" stroke-width="${isActive ? 2 : 1.5}"${place.zone === 'todo' ? ' stroke-opacity=".8"' : ''}/>${inside}${label}`
 }
@@ -147,7 +147,7 @@ export function renderPlan(stage: Stage, scene: PlanScene, layout: PlanLayout, s
   const current = scene.steps.find(s => s.status === 'active')
   const hudTop = current === undefined
     ? w.stepsDone(done, total)
-    : `${w.step(current.ordinal, total)} · ${shorten(current.text, 46)}`
+    : `${w.step(current.ordinal, total)} · ${cut(current.text, 46)}`
   const shared = stage.resource
   const hudResource = shared === null
     ? ''
